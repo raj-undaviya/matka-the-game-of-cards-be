@@ -1,0 +1,80 @@
+"""
+Matka Game — DRF Serializers
+==============================
+IMPORTANT: server_seed field kisi bhi serializer mein NAHI hai.
+"""
+from rest_framework import serializers
+from .models import Round, Bet
+from core.game_engine import GAME_CONFIGS, GameVariation
+
+
+class RoundListSerializer(serializers.ModelSerializer):
+    slots_filled    = serializers.ReadOnlyField()
+    slots_available = serializers.ReadOnlyField()
+    entry_fee       = serializers.SerializerMethodField()
+    max_slots       = serializers.SerializerMethodField()
+    reward_info     = serializers.SerializerMethodField()
+
+    class Meta:
+        model  = Round
+        fields = [
+            'id', 'variation', 'status',
+            'seed_hash',          # provably fair — public
+            'entry_fee', 'max_slots', 'slots_filled', 'slots_available',
+            'reward_info', 'draw_at', 'created_at',
+        ]
+        # server_seed EXCLUDED — never expose
+
+    def get_entry_fee(self, obj):
+        config = GAME_CONFIGS[GameVariation(obj.variation)]
+        return config.entry_fee
+
+    def get_max_slots(self, obj):
+        config = GAME_CONFIGS[GameVariation(obj.variation)]
+        return config.max_slots
+
+    def get_reward_info(self, obj):
+        config = GAME_CONFIGS[GameVariation(obj.variation)]
+        info = {"multiplier": config.reward_multiplier}
+        if config.reward_multiplier_small:
+            info["multiplier_small"] = config.reward_multiplier_small
+        return info
+
+
+class RoundDetailSerializer(RoundListSerializer):
+    """Completed round mein drawn_numbers aur proof dikhao"""
+    provably_fair_proof = serializers.SerializerMethodField()
+
+    class Meta(RoundListSerializer.Meta):
+        fields = RoundListSerializer.Meta.fields + [
+            'drawn_numbers', 'provably_fair_proof', 'completed_at'
+        ]
+
+    def get_provably_fair_proof(self, obj):
+        if obj.winners_data:
+            return obj.winners_data.get('provably_fair_proof')
+        return None
+
+
+class PlaceBetSerializer(serializers.Serializer):
+    round_id         = serializers.UUIDField()
+    selected_numbers = serializers.ListField(
+        child=serializers.IntegerField(min_value=1, max_value=10),
+        min_length=1,
+        max_length=3
+    )
+    entry_fee        = serializers.IntegerField(min_value=1)
+
+
+class BetSerializer(serializers.ModelSerializer):
+    username = serializers.CharField(source='user.username', read_only=True)
+
+    class Meta:
+        model  = Bet
+        fields = [
+            'id', 'round_id', 'username',
+            'selected_numbers', 'entry_fee',
+            'status', 'reward_amount', 'win_type',
+            'placed_at'
+        ]
+

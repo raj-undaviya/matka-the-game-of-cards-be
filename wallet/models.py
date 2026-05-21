@@ -15,8 +15,12 @@ class Wallet(models.Model):
 
 class Transaction(models.Model):
     TYPE_CHOICES = [
-        ("deposit",  "Deposit"),
-        ("withdraw", "Withdraw"),
+        ("deposit",    "Deposit"),
+        ("withdraw",   "Withdraw"),
+        # ── Matka game ke liye naye types ──
+        ("bet_debit",  "Bet Placed"),
+        ("win_credit", "Win Credited"),
+        ("refund",     "Refund"),
     ]
     STATUS_CHOICES = [
         ("pending", "Pending"),
@@ -25,11 +29,16 @@ class Transaction(models.Model):
     ]
 
     wallet               = models.ForeignKey(Wallet, on_delete=models.CASCADE, related_name="transactions")
-    transaction_type     = models.CharField(max_length=10, choices=TYPE_CHOICES)
+    transaction_type     = models.CharField(max_length=15, choices=TYPE_CHOICES)
     amount               = models.DecimalField(max_digits=12, decimal_places=2)
+    # Audit trail — nayi wali se liya
+    balance_before       = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
+    balance_after        = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
     status               = models.CharField(max_length=10, choices=STATUS_CHOICES, default="pending")
     razorpay_order_id    = models.CharField(max_length=100, blank=True, null=True)
     razorpay_payment_id  = models.CharField(max_length=100, blank=True, null=True)
+    # reference: bet_id ya round_id (Matka ke liye)
+    reference            = models.CharField(max_length=100, blank=True)
     note                 = models.TextField(blank=True, null=True)
     created_at           = models.DateTimeField(auto_now_add=True)
 

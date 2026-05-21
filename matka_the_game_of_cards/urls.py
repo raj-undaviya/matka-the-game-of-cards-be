@@ -21,5 +21,6 @@ urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/auth/', include('auths.urls')),  # changed auths → auth
     path('api/wallet/', include('wallet.urls')),
+    path('api/game/', include('game.urls')),
     
 ]

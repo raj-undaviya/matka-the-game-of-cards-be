@@ -46,11 +46,12 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     
     'corsheaders',
-    # 'psycopg2',
     'rest_framework',
     'rest_framework_simplejwt',
+    'django_celery_beat',
     
     'auths',
+    'game',
 
     'wallet',
 
@@ -178,6 +179,7 @@ USE_TZ = True
 
 STATIC_URL = 'static/'
 
+FRONTEND_URL = os.getenv('FRONTEND_URL')
 
 EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
 EMAIL_HOST = 'smtp.gmail.com'
@@ -185,10 +187,13 @@ EMAIL_PORT = 587
 EMAIL_USE_TLS = True
 EMAIL_HOST_USER = 'undaviyaraj2000@gmail.com'      # ← apni Gmail yahan dalo
 EMAIL_HOST_PASSWORD = 'iryccrgewlumzzch'       # ← 16-digit Gmail App Password
-DEFAULT_FROM_EMAIL = 'CoolBro <snehasonawane509@gmail.com>'
+DEFAULT_FROM_EMAIL = EMAIL_HOST_USER
 
 
 RAZORPAY_KEY_ID = os.getenv('RAZORPAY_KEY_ID')
 RAZORPAY_KEY_SECRET = os.getenv('RAZORPAY_KEY_SECRET')
 RAZORPAY_ACCOUNT_NUMBER = os.getenv('RAZORPAY_ACCOUNT_NUMBER')
 RAZORPAY_PAYOUT_ENABLED = os.getenv('RAZORPAY_PAYOUT_ENABLED', 'False').lower() in ('true', '1', 't')
+
+# settings.py
+CELERY_BROKER_URL = 'redis://localhost:6379/0'      

@@ -1,3 +1,4 @@
+import datetime
 from time import timezone
 
 import razorpay
@@ -10,8 +11,9 @@ import requests
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAdminUser, IsAuthenticated
-
+from rest_framework import status
 from .models import Wallet, Transaction, WithdrawRequest
+
 from .serializers import (
     WalletSerializer, TransactionSerializer,
     DepositInitSerializer, WithdrawSerializer,
@@ -108,11 +110,11 @@ def get_or_create_razorpay_contact(withdraw_request):
 
 # ── 1. Balance ────────────────────────────────────────────
 class WalletBalanceView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated]     # logged in users hi access kar sakte hain/ 401 unauthorized error 
 
-    def get(self, request):
-        wallet = get_or_create_wallet(request.user)
-        return Response(WalletSerializer(wallet).data)
+    def get(self, request):                    # GET request pe apna balance dikhao get request handle
+        wallet = get_or_create_wallet(request.user)   # user ka wallet lo ya banao agar pehle se nahi hai
+        return Response(WalletSerializer(wallet).data) # wallet data ko serialize karke response me bhejo
     
 
 
@@ -122,18 +124,19 @@ class DepositInitView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        ser = DepositInitSerializer(data=request.data)
-        if not ser.is_valid():
+        ser = DepositInitSerializer(data=request.data)  #serializer request data ko validate krta h
+        if not ser.is_valid():                           # if data invalid h error return hoga
             return Response(ser.errors, status=400)
 
-        amount = ser.validated_data["amount"]
-        wallet = get_or_create_wallet(request.user)
+        amount = ser.validated_data["amount"]            #valid data nikal rha h
+        wallet = get_or_create_wallet(request.user)      #
 
         rz_order = rz_client.order.create({
-            "amount":          int(amount * 100),
+            "amount":          int(amount),
             "currency":        "INR",
             "payment_capture": 1
         })
+        print("Razorpay Order Created:", rz_order)
 
         txn = Transaction.objects.create(
             wallet=wallet,
@@ -145,15 +148,17 @@ class DepositInitView(APIView):
 
         return Response({
             "order_id":       rz_order["id"],
-            "amount":         int(amount * 100),
+            "amount":         int(amount),
             "currency":       "INR",
             "key_id":         settings.RAZORPAY_KEY_ID,
-            "transaction_id": txn.id
-        }, status=201)
+            "transaction_id": txn.id,
+            "razorpay_payment_id": txn.razorpay_payment_id
+        }, status=status.HTTP_201_CREATED)
 
 
 # ── 3. Deposit Verify ─────────────────────────────────────
 class DepositVerifyView(APIView):
+
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
@@ -282,7 +287,7 @@ class AdminWithdrawActionView(APIView):
         admin_note = ser.validated_data.get("admin_note", "")
 
         try:
-            withdraw_req = WithdrawRequest.objects.select_for_update().get(
+            withdraw_req = WithdrawRequest.objects.get(
                 id=pk, status="pending"
             )
         except WithdrawRequest.DoesNotExist:
@@ -325,7 +330,7 @@ class AdminWithdrawActionView(APIView):
                     withdraw_req.razorpay_payout_id = payout_id
                     withdraw_req.payout_response    = payout_response
                     withdraw_req.admin_note         = admin_note
-                    withdraw_req.processed_at       = timezone.now()
+                    withdraw_req.processed_at       = datetime.now()
                     withdraw_req.save()
 
                     # Transaction success karo
@@ -337,13 +342,13 @@ class AdminWithdrawActionView(APIView):
 
                     return Response({
                         "message":   "Payout successful! Paisa user ke account me ja raha hai.",
-                        "payout_id": payout_id
+                        "payout_id": withdraw_req
                     })
 
                 except Exception as e:
                     withdraw_req.status     = "failed"
                     withdraw_req.admin_note = str(e)
-                    withdraw_req.processed_at = timezone.now()
+                    withdraw_req.processed_at = datetime.datetime.now()
                     withdraw_req.save()
 
                     # Balance wapas karo
@@ -373,7 +378,7 @@ class AdminMarkPaidView(APIView):
 
     def post(self, request, pk):
         try:
-            withdraw_req = WithdrawRequest.objects.select_for_update().get(
+            withdraw_req = WithdrawRequest.objects.get(
                 id=pk, status="pending"
             )
         except WithdrawRequest.DoesNotExist:
