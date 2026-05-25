@@ -131,6 +131,8 @@ DATABASES = {
         ssl_require=True
     ),
 }
+print("DATABASE_URL:", os.getenv('DATABASE_URL'))  # debug print to verify env variable
+print("DATABASES:", DATABASES)  # debug print to verify database config
 
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
