@@ -110,11 +110,11 @@ def get_or_create_razorpay_contact(withdraw_request):
 
 # ── 1. Balance ────────────────────────────────────────────
 class WalletBalanceView(APIView):
-    permission_classes = [IsAuthenticated]     # logged in users hi access kar sakte hain/ 401 unauthorized error 
+    permission_classes = [IsAuthenticated]     
 
-    def get(self, request):                    # GET request pe apna balance dikhao get request handle
-        wallet = get_or_create_wallet(request.user)   # user ka wallet lo ya banao agar pehle se nahi hai
-        return Response(WalletSerializer(wallet).data) # wallet data ko serialize karke response me bhejo
+    def get(self, request):                    
+        wallet = get_or_create_wallet(request.user)   
+        return Response(WalletSerializer(wallet).data)
     
 
 
@@ -124,12 +124,12 @@ class DepositInitView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        ser = DepositInitSerializer(data=request.data)  #serializer request data ko validate krta h
-        if not ser.is_valid():                           # if data invalid h error return hoga
+        ser = DepositInitSerializer(data=request.data)  
+        if not ser.is_valid():                           
             return Response(ser.errors, status=400)
 
-        amount = ser.validated_data["amount"]            #valid data nikal rha h
-        wallet = get_or_create_wallet(request.user)      #
+        amount = ser.validated_data["amount"]            
+        wallet = get_or_create_wallet(request.user)     
 
         rz_order = rz_client.order.create({
             "amount":          int(amount),
