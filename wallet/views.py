@@ -110,6 +110,7 @@ def get_or_create_razorpay_contact(withdraw_request):
 
 # ── 1. Balance ────────────────────────────────────────────
 class WalletBalanceView(APIView):
+
     permission_classes = [IsAuthenticated]     
 
     def get(self, request):                    
@@ -132,7 +133,7 @@ class DepositInitView(APIView):
         wallet = get_or_create_wallet(request.user)     
 
         rz_order = rz_client.order.create({
-            "amount":          int(amount),
+            "amount":          int(amount) * 100,  # paise me
             "currency":        "INR",
             "payment_capture": 1
         })
@@ -148,7 +149,7 @@ class DepositInitView(APIView):
 
         return Response({
             "order_id":       rz_order["id"],
-            "amount":         int(amount),
+            "amount":         int(amount) * 100,  # paise me
             "currency":       "INR",
             "key_id":         settings.RAZORPAY_KEY_ID,
             "transaction_id": txn.id,

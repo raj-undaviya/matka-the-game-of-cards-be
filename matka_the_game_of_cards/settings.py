@@ -50,6 +50,7 @@ INSTALLED_APPS = [
     'rest_framework',
     'rest_framework_simplejwt',
     'django_celery_beat',
+    'channels',
     
     'auths',
     'game',
@@ -131,8 +132,6 @@ DATABASES = {
         ssl_require=True
     ),
 }
-print("DATABASE_URL:", os.getenv('DATABASE_URL'))  # debug print to verify env variable
-print("DATABASES:", DATABASES)  # debug print to verify database config
 
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
@@ -206,4 +205,22 @@ RAZORPAY_ACCOUNT_NUMBER = os.getenv('RAZORPAY_ACCOUNT_NUMBER')
 RAZORPAY_PAYOUT_ENABLED = os.getenv('RAZORPAY_PAYOUT_ENABLED', 'False').lower() in ('true', '1', 't')
 
 # settings.py
-CELERY_BROKER_URL = 'redis://localhost:6379/0'      
+CELERY_BROKER_URL = 'redis://localhost:6379/0'
+
+# ── Django Channels ──────────────────────────────────────────────────
+# HTTP + WebSocket dono handle karne ke liye ASGI use karo
+ASGI_APPLICATION = 'matka_the_game_of_cards.asgi.application'
+
+# Redis Channel Layer — WebSocket broadcast ke liye
+# Redis broker wahi use kar rahe hain jo Celery ke liye hai (db 0)
+# Channel Layer alag db (db 1) use karta hai — conflict avoid karne ke liye
+CHANNEL_LAYERS = {
+    "default": {
+        "BACKEND": "channels_redis.core.RedisChannelLayer",
+        "CONFIG": {
+            "hosts": [("127.0.0.1", 6379)],
+            "capacity": 1500,       # max messages per channel
+            "expiry": 10,           # seconds before unread message expires
+        },
+    }
+}
