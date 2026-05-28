@@ -27,6 +27,7 @@ class RegisterView(APIView):
     Body: { "username": "", "email": "", "password": "" }
     """
 
+    permission_classes = [AllowAny]
     def post(self, request):
         serializer = RegisterSerializer(data=request.data)
         if not serializer.is_valid():
@@ -54,6 +55,7 @@ class LoginView(APIView):
     Body: { "email": "", "password": "" }
     """
 
+    permission_classes = [AllowAny]
     def post(self, request):
         email = request.data.get("email")
         password = request.data.get("password")
@@ -94,6 +96,7 @@ class OTPSendView(APIView):
     Registration OTP resend.
     """
 
+    permission_classes = [AllowAny]
     def post(self, request):
         email = request.data.get("email")
         if not email:
@@ -126,6 +129,7 @@ class VerifyOTPView(APIView):
     Registration email verify karo.
     """
 
+    permission_classes = [AllowAny]
     def post(self, request):
         email = request.data.get("email")
         otp = request.data.get("otp")
@@ -165,6 +169,7 @@ class ForgetPasswordOTPView(APIView):
     Password reset OTP bhejo.
     """
 
+    permission_classes = [AllowAny]
     def post(self, request):
         email = request.data.get("email")
         if not email:
@@ -194,7 +199,8 @@ class ForgetPasswordVerifyOTPView(APIView):
     POST /api/auth/password/verify-otp/
     Body: { "email": "", "otp": "" }
     """
-
+    
+    permission_classes = [AllowAny]
     def post(self, request):
         email = request.data.get("email")
         otp = request.data.get("otp")
@@ -230,6 +236,7 @@ class ForgetPasswordResetView(APIView):
     Body: { "email": "", "new_password": "" }
     """
 
+    permission_classes = [AllowAny]
     def post(self, request):
         email = request.data.get("email")
         new_password = request.data.get("new_password")
