@@ -26,7 +26,6 @@ class RegisterView(APIView):
     POST /api/auth/register/
     Body: { "username": "", "email": "", "password": "" }
     """
-    permission_classes = [AllowAny]
 
     def post(self, request):
         serializer = RegisterSerializer(data=request.data)
@@ -54,7 +53,6 @@ class LoginView(APIView):
     POST /api/auth/login/
     Body: { "email": "", "password": "" }
     """
-    permission_classes = [AllowAny]
 
     def post(self, request):
         email = request.data.get("email")
