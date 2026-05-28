@@ -93,7 +93,6 @@ class OTPSendView(APIView):
     Body: { "email": "" }
     Registration OTP resend.
     """
-    permission_classes = [AllowAny]
 
     def post(self, request):
         email = request.data.get("email")
@@ -126,7 +125,6 @@ class VerifyOTPView(APIView):
     Body: { "email": "", "otp": "" }
     Registration email verify karo.
     """
-    permission_classes = [AllowAny]
 
     def post(self, request):
         email = request.data.get("email")
@@ -166,7 +164,6 @@ class ForgetPasswordOTPView(APIView):
     Body: { "email": "" }
     Password reset OTP bhejo.
     """
-    permission_classes = [AllowAny]
 
     def post(self, request):
         email = request.data.get("email")
@@ -197,7 +194,6 @@ class ForgetPasswordVerifyOTPView(APIView):
     POST /api/auth/password/verify-otp/
     Body: { "email": "", "otp": "" }
     """
-    permission_classes = [AllowAny]
 
     def post(self, request):
         email = request.data.get("email")
@@ -233,7 +229,6 @@ class ForgetPasswordResetView(APIView):
     POST /api/auth/password/reset/
     Body: { "email": "", "new_password": "" }
     """
-    permission_classes = [AllowAny]
 
     def post(self, request):
         email = request.data.get("email")
