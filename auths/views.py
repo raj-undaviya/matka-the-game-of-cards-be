@@ -69,7 +69,7 @@ class LoginView(APIView):
             user.save()
 
             # ── Login success alert ───────────────────────────────────────────
-            EmailService.send_login_alert(user, request=request, was_successful=True)
+            # EmailService.send_login_alert(user, request=request, was_successful=True)
 
             return Response(
                 {"message": "Login successful", "data": serializer.data},
