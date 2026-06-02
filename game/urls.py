@@ -16,6 +16,7 @@ from .views import (
 
     # Admin APIs
     AdminDashboardView,
+    AdminGamesView,
     AdminRoundListView, AdminRoundDetailView, AdminForceDrawView,
     AdminUserListView, AdminUserDetailView, AdminWalletAdjustView,
     AdminTransactionListView,
@@ -36,6 +37,7 @@ urlpatterns = [
 
     # ── Admin APIs ─────────────────────────────────────────────────
     path('admin/dashboard/',          AdminDashboardView.as_view(),     name='admin-dashboard'),
+    path('admin/games/',              AdminGamesView.as_view(),         name='admin-games'),
 
     path('admin/rounds/',             AdminRoundListView.as_view(),     name='admin-round-list'),
     path('admin/rounds/<uuid:round_id>/',       AdminRoundDetailView.as_view(), name='admin-round-detail'),

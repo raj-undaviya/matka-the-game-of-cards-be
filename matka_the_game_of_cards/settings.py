@@ -56,6 +56,8 @@ INSTALLED_APPS = [
     'game',
 
     'wallet',
+    'servers',
+
 
 ]
 
@@ -224,3 +226,18 @@ CHANNEL_LAYERS = {
         },
     }
 }
+
+import environ
+env = environ.Env()
+environ.Env.read_env()  # .env file read karega
+ 
+# AWS Credentials — KABHI hardcode mat karo
+AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
+AWS_ACCESS_KEY_ID     = os.getenv("AWS_ACCESS_KEY_ID")
+ 
+# Tumhare game servers ki default config
+AWS_DEFAULT_REGION    = os.getenv("AWS_DEFAULT_REGION", default="us-east-1")
+AWS_AMI_ID            = os.getenv("AWS_AMI_ID")           # ami-0xxxxxxxx
+AWS_KEY_PAIR          = os.getenv("AWS_KEY_PAIR")          # "matka-game-key"
+AWS_SECURITY_GROUP_ID = os.getenv("AWS_SECURITY_GROUP_ID") # "sg-xxxxxxxx"
+AWS_SUBNET_ID         = os.getenv("AWS_SUBNET_ID")         # "subnet-xxxxxxxx"
