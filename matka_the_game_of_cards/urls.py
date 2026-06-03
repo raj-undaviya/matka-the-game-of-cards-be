@@ -23,4 +23,5 @@ urlpatterns = [
     path('api/wallet/', include('wallet.urls')),
     path('api/game/', include('game.urls')),
     path("api/admin/", include('servers.urls')),  # ← yeh add karo
+    path("api/policies/", include('policies.urls')),  # ← yeh add karo
 ]

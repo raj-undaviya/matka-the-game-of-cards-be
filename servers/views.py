@@ -11,7 +11,6 @@ from .models import GameServer
 from .services import AWSServerService
 import logging
  
- 
 aws_service = AWSServerService()
 logger = logging.getLogger(__name__)
  

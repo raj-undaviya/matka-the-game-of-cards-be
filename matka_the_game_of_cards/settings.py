@@ -57,6 +57,7 @@ INSTALLED_APPS = [
 
     'wallet',
     'servers',
+    'policies',
 
 
 ]
