@@ -25,7 +25,6 @@ daphne==4.2.1
 dj-database-url==3.1.2
 Django==6.0.5
 django-celery-beat==2.9.0
-django-channels==0.7.0
 django-cors-headers==4.9.0
 django-environ==0.13.0
 django-timezone-field==7.2.1
@@ -41,7 +40,6 @@ msgpack==1.1.2
 oauthlib==3.3.1
 packaging==26.2
 prompt_toolkit==3.0.52
-psycopg2==2.9.12
 psycopg2-binary==2.9.12
 py-ubjson==0.16.1
 pyasn1==0.6.3

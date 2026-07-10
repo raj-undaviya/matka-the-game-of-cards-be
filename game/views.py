@@ -66,14 +66,15 @@ from decimal import Decimal
 from django.db import transaction as db_transaction
 from django.core.cache import cache
 from datetime import timedelta
-from .models import Round, Bet
+from .models import Round, Bet, Game, Pool, PoolParticipant
 from wallet.models import Wallet, Transaction, WithdrawRequest
 from .serializers import (
     RoundListSerializer, RoundDetailSerializer,
-    PlaceBetSerializer, BetSerializer
+    PlaceBetSerializer, BetSerializer,
+    GameSerializer, PoolSerializer, PoolParticipantSerializer
 )
 from wallet.serializers import WalletSerializer, TransactionSerializer
-from .services import RoundService, WalletService, notify_slot_update
+from .services import RoundService, WalletService, notify_slot_update, PoolService
 
 User = get_user_model()
 
@@ -1482,3 +1483,88 @@ def _time_ago(dt):
         return f"{h} hour{'s' if h != 1 else ''} ago"
     d = seconds // 86400
     return f"{d} day{'s' if d != 1 else ''} ago"
+
+
+# ══════════════════════════════════════════
+# Custom Game & Pool Views
+# ══════════════════════════════════════════
+
+class AdminGameCreateView(APIView):
+    permission_classes = [IsAdminUser]
+
+    def get(self, request):
+        games = Game.objects.all().order_by('-created_at')
+        serializer = GameSerializer(games, many=True)
+        return Response(serializer.data)
+
+    def post(self, request):
+        serializer = GameSerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class AdminPoolCreateView(APIView):
+    permission_classes = [IsAdminUser]
+
+    def post(self, request):
+        serializer = PoolSerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class AdminPoolStartView(APIView):
+    permission_classes = [IsAdminUser]
+
+    def post(self, request, pool_id):
+        success = PoolService.start_pool(pool_id)
+        if not success:
+            return Response({"error": "Failed to start pool. Make sure it is in upcoming status."}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({"message": "Pool started successfully and Round 1 is open."}, status=status.HTTP_200_OK)
+
+
+class PoolListView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        pools = Pool.objects.all().order_by('-created_at')
+        serializer = PoolSerializer(pools, many=True)
+        return Response(serializer.data)
+
+
+class PoolJoinView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pool_id):
+        success, result = PoolService.join_pool(pool_id, request.user)
+        if not success:
+            return Response({"error": result}, status=status.HTTP_400_BAD_REQUEST)
+        serializer = PoolParticipantSerializer(result)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class PoolLeaderboardView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pool_id):
+        pool = get_object_or_404(Pool, id=pool_id)
+        participants = pool.participants.all().order_by('rank', '-total_points', 'joined_at')
+        serializer = PoolParticipantSerializer(participants, many=True)
+        
+        # Include current active round ID and round number so FE can display it
+        active_round = pool.rounds.filter(status=Round.Status.BETTING_OPEN).first()
+        active_round_id = str(active_round.id) if active_round else None
+        active_round_num = active_round.round_number if active_round else None
+
+        return Response({
+            "pool_name": pool.name,
+            "pool_status": pool.status,
+            "game_variation": pool.game.variation,
+            "rounds_count": pool.rounds_count,
+            "active_round_id": active_round_id,
+            "active_round_num": active_round_num,
+            "leaderboard": serializer.data
+        })

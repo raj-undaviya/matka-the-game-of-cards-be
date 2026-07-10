@@ -4,7 +4,7 @@ Matka Game — DRF Serializers
 IMPORTANT: server_seed field kisi bhi serializer mein NAHI hai.
 """
 from rest_framework import serializers
-from .models import Round, Bet
+from .models import Round, Bet, Game, Pool, PoolParticipant
 from core.game_engine import GAME_CONFIGS, GameVariation
 
 
@@ -75,6 +75,38 @@ class BetSerializer(serializers.ModelSerializer):
             'id', 'round_id', 'username',
             'selected_numbers', 'entry_fee',
             'status', 'reward_amount', 'win_type',
-            'placed_at'
+            'placed_at', 'points_earned'
         ]
+
+
+class GameSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Game
+        fields = ['id', 'name', 'variation', 'description', 'is_active', 'created_at']
+
+
+class PoolSerializer(serializers.ModelSerializer):
+    game_name = serializers.CharField(source='game.name', read_only=True)
+    game_variation = serializers.CharField(source='game.variation', read_only=True)
+    participants_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Pool
+        fields = [
+            'id', 'game', 'game_name', 'game_variation', 'name', 'entry_fee',
+            'max_players', 'duration_minutes', 'rounds_count', 'round_duration_seconds',
+            'status', 'created_at', 'start_time', 'end_time', 'participants_count'
+        ]
+
+    def get_participants_count(self, obj):
+        return obj.participants.count()
+
+
+class PoolParticipantSerializer(serializers.ModelSerializer):
+    username = serializers.CharField(source='user.username', read_only=True)
+
+    class Meta:
+        model = PoolParticipant
+        fields = ['id', 'pool', 'username', 'total_points', 'rank', 'reward_paid', 'joined_at']
+
 

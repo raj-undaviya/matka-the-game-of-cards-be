@@ -13,7 +13,7 @@ from django.db import transaction
 from django.utils import timezone
 from django.contrib.auth import get_user_model
 
-from .models import Round, Bet
+from .models import Round, Bet, Game, Pool, PoolParticipant
 from wallet.models import Wallet, Transaction
 from core.rng_engine import ProvablyFairRNG, SeedCommitment
 from core.game_engine import (
@@ -166,11 +166,17 @@ class RoundService:
         if round_obj.status != Round.Status.BETTING_OPEN:
             return False, "Betting is closed for this round."
 
+        # If it's a pool, check if player is a participant
+        if round_obj.pool:
+            if not round_obj.pool.participants.filter(user=user).exists():
+                return False, "You are not a participant in this pool."
+
         game_var = GameVariation(round_obj.variation)
         config = GAME_CONFIGS[game_var]
 
+        max_slots = round_obj.pool.participants.count() if round_obj.pool else config.max_slots
         current_count = round_obj.bets.count()
-        if current_count >= config.max_slots:
+        if current_count >= max_slots:
             return False, "Round is full."
 
         if game_var != GameVariation.JACKPOT:
@@ -189,25 +195,27 @@ class RoundService:
         if not valid:
             return False, msg
 
-        ok, result = WalletService.debit(
-            user=user,
-            amount=entry_fee,
-            reference=str(round_obj.id),
-            note=f"Bet on round {str(round_obj.id)[:8]} ({round_obj.variation})"
-        )
-        if not ok:
-            return False, result
+        if not round_obj.pool:
+            ok, result = WalletService.debit(
+                user=user,
+                amount=entry_fee,
+                reference=str(round_obj.id),
+                note=f"Bet on round {str(round_obj.id)[:8]} ({round_obj.variation})"
+            )
+            if not ok:
+                return False, result
 
         bet = Bet.objects.create(
             round=round_obj,
             user=user,
             selected_numbers=selected_numbers,
             entry_fee=Decimal(str(entry_fee)),
-            status=Bet.Status.PENDING
+            status=Bet.Status.PENDING,
+            pool=round_obj.pool
         )
 
         new_count = current_count + 1
-        if game_var != GameVariation.JACKPOT and new_count >= config.max_slots:
+        if game_var != GameVariation.JACKPOT and new_count >= max_slots:
             RoundService._trigger_draw(round_obj)
 
         round_obj.refresh_from_db()
@@ -271,15 +279,18 @@ class RoundService:
                 bet.status        = Bet.Status.WON
                 bet.reward_amount = Decimal(str(win_data['reward_amount']))
                 bet.win_type      = win_data['win_type']
-                bet.save(update_fields=['status', 'reward_amount', 'win_type'])
+                if round_obj.pool:
+                    bet.points_earned = int(win_data['reward_amount'])
+                bet.save(update_fields=['status', 'reward_amount', 'win_type', 'points_earned'])
 
-                WalletService.credit(
-                    user=bet.user,
-                    amount=win_data['reward_amount'],
-                    tx_type=TX_WIN_CREDIT,
-                    reference=str(round_obj.id),
-                    note=f"Won {win_data['win_type']} — Round {str(round_obj.id)[:8]}"
-                )
+                if not round_obj.pool:
+                    WalletService.credit(
+                        user=bet.user,
+                        amount=win_data['reward_amount'],
+                        tx_type=TX_WIN_CREDIT,
+                        reference=str(round_obj.id),
+                        note=f"Won {win_data['win_type']} — Round {str(round_obj.id)[:8]}"
+                    )
 
                 try:
                     EmailService.send_win_notification(
@@ -289,7 +300,34 @@ class RoundService:
                     logger.error(f"Win email failed for {bet.user}: {e}")
             else:
                 bet.status = Bet.Status.LOST
-                bet.save(update_fields=['status'])
+                if round_obj.pool:
+                    bet.points_earned = 0
+                bet.save(update_fields=['status', 'points_earned'])
+
+        if round_obj.pool:
+            pool = round_obj.pool
+            from django.db.models import Sum
+            # Update participants' points
+            for participant in pool.participants.all():
+                total_pts = Bet.objects.filter(
+                    pool=pool,
+                    user=participant.user,
+                    status=Bet.Status.WON
+                ).aggregate(total=Sum('points_earned'))['total'] or 0
+                participant.total_points = total_pts
+                participant.save(update_fields=['total_points'])
+
+            # Rank participants
+            pool_participants = list(pool.participants.order_by('-total_points', 'joined_at'))
+            for idx, part in enumerate(pool_participants):
+                part.rank = idx + 1
+                part.save(update_fields=['rank'])
+
+            # Check if this was the last round
+            if round_obj.round_number >= pool.rounds_count:
+                PoolService.resolve_pool(pool)
+            else:
+                PoolService.create_next_round(pool, round_obj.round_number + 1)
 
         return result
 
@@ -305,3 +343,130 @@ class RoundService:
                 return RoundService._trigger_draw(round_obj, client_seed="jackpot_timer")
         except Round.DoesNotExist:
             return None
+
+
+class PoolService:
+
+    @staticmethod
+    @transaction.atomic
+    def join_pool(pool_id: str, user) -> tuple:
+        """
+        Deduct entry fee from wallet and create PoolParticipant.
+        """
+        try:
+            pool = Pool.objects.select_for_update().get(id=pool_id)
+        except Pool.DoesNotExist:
+            return False, "Pool not found."
+
+        if pool.status != Pool.Status.UPCOMING:
+            return False, "Cannot join. Pool is already active or completed."
+
+        if pool.participants.count() >= pool.max_players:
+            return False, "Pool is full."
+
+        if pool.participants.filter(user=user).exists():
+            return False, "You have already joined this pool."
+
+        # Debit entry fee from user wallet
+        ok, result = WalletService.debit(
+            user=user,
+            amount=pool.entry_fee,
+            reference=f"pool_join:{pool.id}",
+            note=f"Joined pool {pool.name} (Entry fee: ₹{pool.entry_fee})"
+        )
+        if not ok:
+            return False, result
+
+        participant = PoolParticipant.objects.create(
+            pool=pool,
+            user=user
+        )
+
+        return True, participant
+
+    @staticmethod
+    @transaction.atomic
+    def start_pool(pool_id: str) -> bool:
+        try:
+            pool = Pool.objects.select_for_update().get(id=pool_id)
+        except Pool.DoesNotExist:
+            return False
+
+        if pool.status != Pool.Status.UPCOMING:
+            return False
+
+        pool.status = Pool.Status.ACTIVE
+        pool.start_time = timezone.now()
+        pool.save(update_fields=['status', 'start_time'])
+
+        # Create round 1
+        PoolService.create_next_round(pool, 1)
+        return True
+
+    @staticmethod
+    def create_next_round(pool: Pool, round_num: int):
+        """
+        Creates and opens the next round in a pool.
+        """
+        round_id_str = str(uuid.uuid4())
+        server_seed, commitment = ProvablyFairRNG.create_commitment(round_id_str)
+
+        round_obj = Round.objects.create(
+            id=uuid.UUID(round_id_str),
+            variation=pool.game.variation,
+            status=Round.Status.BETTING_OPEN,
+            server_seed=server_seed,
+            seed_hash=commitment.server_seed_hash,
+            pool=pool,
+            round_number=round_num
+        )
+        return round_obj
+
+    @staticmethod
+    @transaction.atomic
+    def resolve_pool(pool: Pool):
+        """
+        Rank participants, pay rewards to top 3, and mark completed.
+        """
+        if pool.status == Pool.Status.COMPLETED:
+            return
+
+        participants = list(pool.participants.select_for_update().order_by('-total_points', 'joined_at'))
+        total_participants = len(participants)
+
+        if total_participants == 0:
+            pool.status = Pool.Status.COMPLETED
+            pool.end_time = timezone.now()
+            pool.save(update_fields=['status', 'end_time'])
+            return
+
+        # Calculate ranks
+        for idx, part in enumerate(participants):
+            part.rank = idx + 1
+            part.save(update_fields=['rank'])
+
+        # Total pool amount collected
+        total_collected = pool.entry_fee * total_participants
+
+        # Reward distribution for top 3
+        # 1st: 50%, 2nd: 30%, 3rd: 20%
+        percentages = [0.50, 0.30, 0.20]
+
+        for rank_idx in range(min(3, total_participants)):
+            part = participants[rank_idx]
+            payout = Decimal(str(total_collected)) * Decimal(str(percentages[rank_idx]))
+            part.reward_paid = payout
+            part.save(update_fields=['reward_paid'])
+
+            # Credit wallet
+            WalletService.credit(
+                user=part.user,
+                amount=payout,
+                tx_type=TX_WIN_CREDIT,
+                reference=f"pool_win:{pool.id}",
+                note=f"Won rank {rank_idx + 1} in pool {pool.name} — Prize: ₹{payout}"
+            )
+
+        pool.status = Pool.Status.COMPLETED
+        pool.end_time = timezone.now()
+        pool.save(update_fields=['status', 'end_time'])

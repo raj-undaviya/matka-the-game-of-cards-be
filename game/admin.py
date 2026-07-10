@@ -9,7 +9,37 @@ NOTE: Wallet aur Transaction admin → wallet/admin.py mein hai.
 """
 from django.contrib import admin
 from django.utils.html import format_html
-from .models import Round, Bet   # ← sirf matka models, Wallet/WalletTransaction nahi
+from .models import Round, Bet, Game, Pool, PoolParticipant
+
+
+@admin.register(Game)
+class GameAdmin(admin.ModelAdmin):
+    list_display = ['name', 'variation', 'is_active', 'created_at']
+    list_filter = ['variation', 'is_active']
+    search_fields = ['name']
+
+
+class PoolParticipantInline(admin.TabularInline):
+    model = PoolParticipant
+    extra = 0
+    readonly_fields = ['user', 'total_points', 'rank', 'reward_paid']
+    can_delete = False
+
+
+@admin.register(Pool)
+class PoolAdmin(admin.ModelAdmin):
+    list_display = ['name', 'game', 'entry_fee', 'max_players', 'status', 'created_at']
+    list_filter = ['status', 'game']
+    search_fields = ['name']
+    inlines = [PoolParticipantInline]
+
+
+@admin.register(PoolParticipant)
+class PoolParticipantAdmin(admin.ModelAdmin):
+    list_display = ['user', 'pool', 'total_points', 'rank', 'reward_paid']
+    list_filter = ['pool', 'rank']
+    search_fields = ['user__username', 'pool__name']
+
 
 
 class BetInline(admin.TabularInline):

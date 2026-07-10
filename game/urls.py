@@ -20,6 +20,14 @@ from .views import (
     AdminRoundListView, AdminRoundDetailView, AdminForceDrawView,
     AdminUserListView, AdminUserDetailView, AdminWalletAdjustView,
     AdminTransactionListView,
+
+    # Dynamic Games & Pools APIs
+    AdminGameCreateView,
+    AdminPoolCreateView,
+    AdminPoolStartView,
+    PoolListView,
+    PoolJoinView,
+    PoolLeaderboardView,
 )
 
 urlpatterns = [
@@ -35,9 +43,17 @@ urlpatterns = [
     path('wallet/',                   WalletView.as_view(),             name='wallet'),
     path('wallet/transactions/',      WalletTransactionView.as_view(),  name='wallet-txns'),
 
+    # ── Dynamic Pools User APIs ────────────────────────────────────
+    path('pools/',                    PoolListView.as_view(),            name='pool-list'),
+    path('pools/<int:pool_id>/join/', PoolJoinView.as_view(),            name='pool-join'),
+    path('pools/<int:pool_id>/leaderboard/', PoolLeaderboardView.as_view(), name='pool-leaderboard'),
+
     # ── Admin APIs ─────────────────────────────────────────────────
     path('admin/dashboard/',          AdminDashboardView.as_view(),     name='admin-dashboard'),
     path('admin/games/',              AdminGamesView.as_view(),         name='admin-games'),
+    path('admin/games/create/',       AdminGameCreateView.as_view(),    name='admin-game-create'),
+    path('admin/pools/create/',       AdminPoolCreateView.as_view(),    name='admin-pool-create'),
+    path('admin/pools/<int:pool_id>/start/', AdminPoolStartView.as_view(), name='admin-pool-start'),
 
     path('admin/rounds/',             AdminRoundListView.as_view(),     name='admin-round-list'),
     path('admin/rounds/<uuid:round_id>/',       AdminRoundDetailView.as_view(), name='admin-round-detail'),
