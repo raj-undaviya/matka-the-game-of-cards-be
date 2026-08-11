@@ -22,15 +22,19 @@ class DepositInitSerializer(serializers.Serializer):
     amount = serializers.DecimalField(max_digits=12, decimal_places=2, min_value=1)
 
 
+class PhonePeVerifySerializer(serializers.Serializer):
+    merchantTransactionId = serializers.CharField()
+    transactionId = serializers.CharField(required=False, allow_blank=True)
+    code = serializers.CharField(required=False, allow_blank=True)
+    amount = serializers.IntegerField(required=False)
+    merchantId = serializers.CharField(required=False, allow_blank=True)
+    state = serializers.CharField(required=False, allow_blank=True)
+
+
 class WithdrawSerializer(serializers.Serializer):
     amount = serializers.DecimalField(max_digits=12, decimal_places=2, min_value=1)
     note   = serializers.CharField(required=False, allow_blank=True)
 
-
-class RazorpayVerifySerializer(serializers.Serializer):
-    razorpay_order_id   = serializers.CharField()
-    razorpay_payment_id = serializers.CharField()
-    razorpay_signature  = serializers.CharField()
 
 # ── Withdraw Request Serializers ──────────────────────────
 class WithdrawRequestSerializer(serializers.ModelSerializer):

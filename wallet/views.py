@@ -1,403 +1,863 @@
 import datetime
-from time import timezone
+import json
+from decimal import Decimal
 
-import razorpay
-import hmac
-import hashlib
+import requests
 
 from django.conf import settings
 from django.db import transaction as db_transaction
-import requests
+from django.utils import timezone
+
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from rest_framework.permissions import IsAdminUser, IsAuthenticated
+from rest_framework.permissions import (
+    IsAuthenticated,
+    IsAdminUser
+)
 from rest_framework import status
-from .models import Wallet, Transaction, WithdrawRequest
+
+from .models import (
+    Wallet,
+    Transaction,
+    WithdrawRequest 
+)
 
 from .serializers import (
-    WalletSerializer, TransactionSerializer,
-    DepositInitSerializer, WithdrawSerializer,
-    RazorpayVerifySerializer, WithdrawRequestSerializer,
+    WalletSerializer,
+    TransactionSerializer,
+    DepositInitSerializer,
+    PhonePeVerifySerializer,
+    WithdrawRequestSerializer,
     AdminWithdrawActionSerializer
 )
-
-rz_client = razorpay.Client(
-    auth=(settings.RAZORPAY_KEY_ID, settings.RAZORPAY_KEY_SECRET)
-)
+from .phonepe import build_payment_payload, build_request_header, verify_phonepe_signature
 
 
-def get_or_create_wallet(user):
-    wallet, _ = Wallet.objects.get_or_create(user=user)
+# ─────────────────────────────────────────────────────────
+# PhonePe Client helpers
+# ─────────────────────────────────────────────────────────
+
+
+# ─────────────────────────────────────────────────────────
+# Helper
+# ─────────────────────────────────────────────────────────
+
+def get_wallet(user):
+
+    wallet, _ = Wallet.objects.get_or_create(
+        user=user
+    )
+
     return wallet
 
-def fire_razorpay_payout(withdraw_request):
-    """Razorpay Payout API call karo."""
 
-    headers = {
-        "Content-Type": "application/json",
-        "X-Payout-Idempotency": f"withdraw_{withdraw_request.id}"
-    }
+# ─────────────────────────────────────────────────────────
+# Wallet Balance
+# ─────────────────────────────────────────────────────────
 
-    # Fund account banao (UPI ya Bank)
-    if withdraw_request.mode == "upi":
-        fund_account = {
-            "account_type": "vpa",
-            "vpa": {"address": withdraw_request.upi_id},
-            "contact_id": get_or_create_razorpay_contact(withdraw_request)
-        }
-    else:
-        fund_account = {
-            "account_type": "bank_account",
-            "bank_account": {
-                "name":           withdraw_request.account_holder,
-                "ifsc":           withdraw_request.ifsc_code,
-                "account_number": withdraw_request.account_number,
-            },
-            "contact_id": get_or_create_razorpay_contact(withdraw_request)
-        }
-
-    # Fund account create karo
-    fa_response = requests.post(
-        "https://api.razorpay.com/v1/fund_accounts",
-        json=fund_account,
-        auth=(settings.RAZORPAY_KEY_ID, settings.RAZORPAY_KEY_SECRET)
-    ).json()
-
-    fund_account_id = fa_response.get("id")
-    if not fund_account_id:
-        raise Exception(f"Fund account create failed: {fa_response}")
-
-    # Payout create karo
-    payout_data = {
-        "account_number":  settings.RAZORPAY_ACCOUNT_NUMBER,  # tumhara Razorpay account
-        "fund_account_id": fund_account_id,
-        "amount":          int(withdraw_request.amount * 100),  # paise me
-        "currency":        "INR",
-        "mode":            "UPI" if withdraw_request.mode == "upi" else "NEFT",
-        "purpose":         "payout",
-        "queue_if_low_balance": True,
-        "narration":       f"Matka Wallet Withdrawal #{withdraw_request.id}"
-    }
-
-    payout_response = requests.post(
-        "https://api.razorpay.com/v1/payouts",
-        json=payout_data,
-        auth=(settings.RAZORPAY_KEY_ID, settings.RAZORPAY_KEY_SECRET),
-        headers=headers
-    ).json()
-
-    return payout_response
-
-
-def get_or_create_razorpay_contact(withdraw_request):
-    """User ka Razorpay contact ID lo ya banao."""
-    user = withdraw_request.wallet.user
-    contact_data = {
-        "name":         user.get_full_name() or user.username,
-        "email":        user.email,
-        "contact":      getattr(user, "phone_number", "9999999999"),
-        "type":         "customer",
-        "reference_id": str(user.id)
-    }
-    response = requests.post(
-        "https://api.razorpay.com/v1/contacts",
-        json=contact_data,
-        auth=(settings.RAZORPAY_KEY_ID, settings.RAZORPAY_KEY_SECRET)
-    ).json()
-    return response.get("id")
-    
-
-
-# ── 1. Balance ────────────────────────────────────────────
 class WalletBalanceView(APIView):
 
-    permission_classes = [IsAuthenticated]     
+    permission_classes = [IsAuthenticated]
 
-    def get(self, request):                    
-        wallet = get_or_create_wallet(request.user)   
-        return Response(WalletSerializer(wallet).data)
-    
+    def get(self, request):
+
+        wallet = get_wallet(request.user)
+
+        return Response(
+            WalletSerializer(wallet).data
+        )
 
 
+# ─────────────────────────────────────────────────────────
+# Deposit Init
+# ─────────────────────────────────────────────────────────
 
-# ── 2. Deposit Init ───────────────────────────────────────
 class DepositInitView(APIView):
+
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        ser = DepositInitSerializer(data=request.data)  
-        if not ser.is_valid():                           
-            return Response(ser.errors, status=400)
 
-        amount = ser.validated_data["amount"]            
-        wallet = get_or_create_wallet(request.user)     
-
-        rz_order = rz_client.order.create({
-            "amount":          int(amount) * 100,  # paise me
-            "currency":        "INR",
-            "payment_capture": 1
-        })
-        print("Razorpay Order Created:", rz_order)
-
-        txn = Transaction.objects.create(
-            wallet=wallet,
-            transaction_type="deposit",
-            amount=amount,
-            status="pending",
-            razorpay_order_id=rz_order["id"]
+        serializer = DepositInitSerializer(
+            data=request.data
         )
 
-        return Response({
-            "order_id":       rz_order["id"],
-            "amount":         int(amount) * 100,  # paise me
-            "currency":       "INR",
-            "key_id":         settings.RAZORPAY_KEY_ID,
-            "transaction_id": txn.id,
-            "razorpay_payment_id": txn.razorpay_payment_id
-        }, status=status.HTTP_201_CREATED)
+        serializer.is_valid(raise_exception=True)
+
+        amount = serializer.validated_data["amount"]
+
+        wallet = get_wallet(request.user)
+
+        receipt_id = (
+            f"user_{request.user.id}_"
+            f"{datetime.datetime.now().timestamp()}"
+        )
+
+        try:
+
+            txn = Transaction.objects.create(
+
+                wallet=wallet,
+
+                transaction_type="deposit",
+
+                amount=amount,
+
+                balance_before=wallet.balance,
+
+                balance_after=wallet.balance,
+                status="pending",
+                note="Wallet Deposit"
+
+            )
+
+            payload = build_payment_payload(
+                merchant_transaction_id=f"txn_{txn.id}",
+                amount=int(amount * 100),
+                callback_url=f"{settings.FRONTEND_URL or 'http://localhost:3000'}/wallet/deposit/callback",
+                user_phone=getattr(request.user, "phone_number", "") or "9999999999",
+                merchant_user_id=str(request.user.id),
+            )
+
+            headers = build_request_header(payload, settings.PHONEPE_SALT_KEY)
+            response = requests.post(
+                f"{settings.PHONEPE_API_URL}/pg/v1/pay",
+                json=payload,
+                headers=headers,
+                timeout=10,
+            )
+            response_data = response.json()
+            txn.razorpay_order_id = response_data.get("data", {}).get("merchantTransactionId") or f"txn_{txn.id}"
+            txn.save(update_fields=["razorpay_order_id"])
+
+            return Response({
+
+                "success": True,
+                "transaction_id": txn.id,
+                "merchant_transaction_id": txn.razorpay_order_id,
+                "amount": int(amount * 100),
+                "redirect_url": response_data.get("data", {}).get("instrumentResponse", {}).get("redirectInfo", {}).get("url"),
+                "response": response_data,
+
+            })
+
+        except Exception as e:
+
+            return Response({
+
+                "success": False,
+
+                "message": str(e)
+
+            }, status=500)
 
 
-# ── 3. Deposit Verify ─────────────────────────────────────
+# ─────────────────────────────────────────────────────────
+# Deposit Verify
+# ─────────────────────────────────────────────────────────
+
 class DepositVerifyView(APIView):
 
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        ser = RazorpayVerifySerializer(data=request.data)
-        if not ser.is_valid():
-            return Response(ser.errors, status=400)
 
-        order_id   = ser.validated_data["razorpay_order_id"]
-        payment_id = ser.validated_data["razorpay_payment_id"]
-        signature  = ser.validated_data["razorpay_signature"]
+        serializer = PhonePeVerifySerializer(
+            data=request.data
+        )
 
-        body     = f"{order_id}|{payment_id}"
-        expected = hmac.new(
-            settings.RAZORPAY_KEY_SECRET.encode(),
-            body.encode(),
-            hashlib.sha256
-        ).hexdigest()
+        serializer.is_valid(raise_exception=True)
 
-        if expected != signature:
-            return Response({"error": "Invalid signature"}, status=400)
+        merchant_transaction_id = serializer.validated_data[
+            "merchantTransactionId"
+        ]
+        payment_id = serializer.validated_data.get(
+            "transactionId", ""
+        )
+        signature = request.headers.get("X-VERIFY", "")
+
+        payload = request.data
+        if not verify_phonepe_signature(json.dumps(payload, separators=(",", ":"), sort_keys=True), settings.PHONEPE_SALT_KEY, signature):
+            return Response({
+
+                "success": False,
+
+                "message": "Invalid payment signature"
+
+            }, status=400)
 
         try:
+
             with db_transaction.atomic():
+
                 txn = Transaction.objects.select_for_update().get(
-                    razorpay_order_id=order_id,
+
                     wallet__user=request.user,
+                    razorpay_order_id=merchant_transaction_id,
                     status="pending"
+
                 )
-                txn.razorpay_payment_id = payment_id
-                txn.status = "success"
-                txn.save()
 
                 wallet = txn.wallet
-                wallet.balance += txn.amount
+
+                balance_before = wallet.balance
+
+                balance_after = (
+                    balance_before + txn.amount
+                )
+
+                wallet.balance = balance_after
+
                 wallet.save()
 
+                txn.balance_before = balance_before
+
+                txn.balance_after = balance_after
+
+                txn.status = "success"
+
+                txn.razorpay_payment_id = payment_id
+
+                txn.save()
+
+                return Response({
+
+                    "success": True,
+
+                    "message": "Deposit Successful",
+
+                    "balance": wallet.balance
+
+                })
+
         except Transaction.DoesNotExist:
-            return Response({"error": "Transaction nahi mili"}, status=404)
 
-        return Response({
-            "message": "Deposit successful!",
-            "balance": str(txn.wallet.balance)
-        })
+            return Response({
 
-# ── 4. Withdraw Request ───────────────────────────────────
+                "success": False,
+
+                "message": "Transaction not found"
+
+            }, status=404)
+
+
+# ─────────────────────────────────────────────────────────
+# Withdraw Request
+# ─────────────────────────────────────────────────────────
 
 class WithdrawRequestView(APIView):
+
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        """Apni saari withdraw requests dekho."""
-        wallet   = get_or_create_wallet(request.user)
-        requests_ = wallet.withdraw_requests.all().order_by("-requested_at")
-        return Response(WithdrawRequestSerializer(requests_, many=True).data)
+
+        wallet = get_wallet(request.user)
+
+        withdraws = wallet.withdraw_requests.all()
+
+        return Response(
+
+            WithdrawRequestSerializer(
+                withdraws,
+                many=True
+            ).data
+        )
 
     def post(self, request):
-        """Nayi withdraw request banao."""
-        ser = WithdrawRequestSerializer(data=request.data)
-        if not ser.is_valid():
-            return Response(ser.errors, status=400)
 
-        amount = ser.validated_data["amount"]
-        wallet = get_or_create_wallet(request.user)
+        serializer = WithdrawRequestSerializer(
+            data=request.data
+        )
 
-        # Balance check
+        serializer.is_valid(raise_exception=True)
+
+        amount = serializer.validated_data["amount"]
+
+        wallet = get_wallet(request.user)
+
         if wallet.balance < amount:
-            return Response(
-                {"error": f"Insufficient balance. Available: ₹{wallet.balance}"},
-                status=400
-            )
+
+            return Response({
+
+                "success": False,
+
+                "message": (
+                    f"Insufficient Balance. "
+                    f"Available ₹{wallet.balance}"
+                )
+
+            }, status=400)
 
         with db_transaction.atomic():
-            # Balance hold karo (deduct kar do — pending me)
-            wallet.balance -= amount
-            wallet.save()
 
-            withdraw_req = WithdrawRequest.objects.create(
-                wallet=wallet,
-                amount=amount,
-                status="pending",
-                mode=ser.validated_data.get("mode", "upi"),
-                upi_id=ser.validated_data.get("upi_id"),
-                account_number=ser.validated_data.get("account_number"),
-                ifsc_code=ser.validated_data.get("ifsc_code"),
-                account_holder=ser.validated_data.get("account_holder"),
-                note=ser.validated_data.get("note", "")
+            balance_before = wallet.balance
+
+            balance_after = (
+                balance_before - amount
             )
 
-            # Transaction record bhi banao
+            wallet.balance = balance_after
+
+            wallet.save()
+
+            withdraw_request = (
+                WithdrawRequest.objects.create(
+
+                    wallet=wallet,
+
+                    amount=amount,
+
+                    mode=serializer.validated_data[
+                        "mode"
+                    ],
+
+                    upi_id=serializer.validated_data.get(
+                        "upi_id"
+                    ),
+
+                    account_number=serializer.validated_data.get(
+                        "account_number"
+                    ),
+
+                    ifsc_code=serializer.validated_data.get(
+                        "ifsc_code"
+                    ),
+
+                    account_holder=serializer.validated_data.get(
+                        "account_holder"
+                    ),
+
+                    note=serializer.validated_data.get(
+                        "note"
+                    )
+                )
+            )
+
             Transaction.objects.create(
+
                 wallet=wallet,
+
                 transaction_type="withdraw",
+
                 amount=amount,
+
+                balance_before=balance_before,
+
+                balance_after=balance_after,
+
                 status="pending",
-                note=f"Withdraw request #{withdraw_req.id}"
+
+                reference=str(withdraw_request.id),
+
+                note=(
+                    f"Withdraw Request "
+                    f"#{withdraw_request.id}"
+                )
             )
 
         return Response({
-            "message":    "Withdraw request submit ho gayi! Admin approve karega.",
-            "request_id": withdraw_req.id,
-            "amount":     str(amount),
-            "status":     "pending"
-        }, status=201)
 
-# ── 5. Admin — Sabhi Withdraw Requests dekho ─────────────
+            "success": True,
+
+            "message": (
+                "Withdraw request submitted"
+            )
+
+        })
+
+
+# ─────────────────────────────────────────────────────────
+# Transaction History
+# ─────────────────────────────────────────────────────────
+
+class TransactionHistoryView(APIView):
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+
+        wallet = get_wallet(request.user)
+
+        txns = wallet.transactions.all()
+
+        txn_type = request.query_params.get(
+            "type"
+        )
+
+        if txn_type:
+
+            txns = txns.filter(
+                transaction_type=txn_type
+            )
+
+        return Response(
+
+            TransactionSerializer(
+                txns,
+                many=True
+            ).data
+        )
+
+
+# ─────────────────────────────────────────────────────────
+# Razorpay Contact
+# ─────────────────────────────────────────────────────────
+
+def create_razorpay_contact(user):
+
+    data = {
+
+        "name": (
+            user.get_full_name()
+            or user.username
+        ),
+
+        "email": user.email,
+
+        "contact": getattr(
+            user,
+            "phone_number",
+            "9999999999"
+        ),
+
+        "type": "customer"
+    }
+
+    response = requests.post(
+
+        "https://api.razorpay.com/v1/contacts",
+
+        json=data,
+
+        auth=(
+
+            settings.RAZORPAY_KEY_ID,
+
+            settings.RAZORPAY_KEY_SECRET
+        )
+    )
+
+    result = response.json()
+
+    return result.get("id")
+
+
+# ─────────────────────────────────────────────────────────
+# Razorpay Fund Account
+# ─────────────────────────────────────────────────────────
+
+def create_fund_account(withdraw_request):
+
+    contact_id = create_razorpay_contact(
+        withdraw_request.wallet.user
+    )
+
+    if withdraw_request.mode == "upi":
+
+        payload = {
+
+            "contact_id": contact_id,
+
+            "account_type": "vpa",
+
+            "vpa": {
+
+                "address":
+                withdraw_request.upi_id
+
+            }
+        }
+
+    else:
+
+        payload = {
+
+            "contact_id": contact_id,
+
+            "account_type": "bank_account",
+
+            "bank_account": {
+
+                "name":
+                withdraw_request.account_holder,
+
+                "ifsc":
+                withdraw_request.ifsc_code,
+
+                "account_number":
+                withdraw_request.account_number
+
+            }
+        }
+
+    response = requests.post(
+
+        "https://api.razorpay.com/v1/fund_accounts",
+
+        json=payload,
+
+        auth=(
+
+            settings.RAZORPAY_KEY_ID,
+
+            settings.RAZORPAY_KEY_SECRET
+        )
+    )
+
+    result = response.json()
+
+    return result.get("id")
+
+
+# ─────────────────────────────────────────────────────────
+# Razorpay Payout
+# ─────────────────────────────────────────────────────────
+
+def create_payout(withdraw_request):
+
+    fund_account_id = create_fund_account(
+        withdraw_request
+    )
+
+    payload = {
+
+        "account_number":
+        settings.RAZORPAY_ACCOUNT_NUMBER,
+
+        "fund_account_id":
+        fund_account_id,
+
+        "amount":
+        int(withdraw_request.amount * 100),
+
+        "currency": "INR",
+
+        "mode":
+        "UPI"
+        if withdraw_request.mode == "upi"
+        else "NEFT",
+
+        "purpose": "payout",
+
+        "queue_if_low_balance": True,
+
+        "reference_id":
+        str(withdraw_request.id),
+
+        "narration":
+        f"Withdraw #{withdraw_request.id}"
+    }
+
+    response = requests.post(
+
+        "https://api.razorpay.com/v1/payouts",
+
+        json=payload,
+
+        auth=(
+
+            settings.RAZORPAY_KEY_ID,
+
+            settings.RAZORPAY_KEY_SECRET
+        )
+    )
+
+    return response.json()
+
+
+# ─────────────────────────────────────────────────────────
+# Admin Withdraw List
+# ─────────────────────────────────────────────────────────
+
 class AdminWithdrawListView(APIView):
+
     permission_classes = [IsAdminUser]
 
     def get(self, request):
-        status_filter = request.query_params.get("status", "pending")
-        requests_ = WithdrawRequest.objects.filter(
-            status=status_filter
-        ).select_related("wallet__user").order_by("-requested_at")
-        return Response(WithdrawRequestSerializer(requests_, many=True).data)
-    
-# ── 6. Admin — Approve / Reject ───────────────────────────
+
+        status_filter = request.GET.get(
+            "status",
+            "pending"
+        )
+
+        requests_list = (
+            WithdrawRequest.objects.filter(
+                status=status_filter
+            )
+            .select_related("wallet__user")
+            .order_by("-requested_at")
+        )
+
+        return Response(
+
+            WithdrawRequestSerializer(
+                requests_list,
+                many=True
+            ).data
+        )
+
+
+# ─────────────────────────────────────────────────────────
+# Admin Withdraw Action
+# ─────────────────────────────────────────────────────────
+
 class AdminWithdrawActionView(APIView):
+
     permission_classes = [IsAdminUser]
 
     def post(self, request, pk):
-        ser = AdminWithdrawActionSerializer(data=request.data)
-        if not ser.is_valid():
-            return Response(ser.errors, status=400)
 
-        action     = ser.validated_data["action"]
-        admin_note = ser.validated_data.get("admin_note", "")
+        serializer = (
+            AdminWithdrawActionSerializer(
+                data=request.data
+            )
+        )
+
+        serializer.is_valid(
+            raise_exception=True
+        )
+
+        action = serializer.validated_data[
+            "action"
+        ]
+
+        admin_note = (
+            serializer.validated_data.get(
+                "admin_note",
+                ""
+            )
+        )
 
         try:
-            withdraw_req = WithdrawRequest.objects.get(
-                id=pk, status="pending"
+
+            withdraw_request = (
+                WithdrawRequest.objects.get(
+
+                    id=pk,
+
+                    status="pending"
+                )
             )
+
         except WithdrawRequest.DoesNotExist:
-            return Response({"error": "Request nahi mili ya already processed hai"}, status=404)
+
+            return Response({
+
+                "success": False,
+
+                "message":
+                "Withdraw request not found"
+
+            }, status=404)
 
         with db_transaction.atomic():
+
+            wallet = withdraw_request.wallet
+
             if action == "reject":
-                # Balance wapas karo
-                wallet = withdraw_req.wallet
-                wallet.balance += withdraw_req.amount
+
+                balance_before = wallet.balance
+
+                balance_after = (
+                    balance_before
+                    + withdraw_request.amount
+                )
+
+                wallet.balance = balance_after
+
                 wallet.save()
 
-                withdraw_req.status     = "rejected"
-                withdraw_req.admin_note = admin_note
-                withdraw_req.processed_at = timezone.now()
-                withdraw_req.save()
+                withdraw_request.status = (
+                    "rejected"
+                )
 
-                # Transaction update
-                Transaction.objects.filter(
+                withdraw_request.admin_note = (
+                    admin_note
+                )
+
+                withdraw_request.processed_at = (
+                    timezone.now()
+                )
+
+                withdraw_request.save()
+
+                txn = Transaction.objects.filter(
+
                     wallet=wallet,
-                    note=f"Withdraw request #{withdraw_req.id}",
+
+                    reference=str(
+                        withdraw_request.id
+                    ),
+
                     status="pending"
-                ).update(status="failed")
+
+                ).first()
+
+                if txn:
+
+                    txn.status = "failed"
+
+                    txn.balance_after = (
+                        balance_after
+                    )
+
+                    txn.save()
 
                 return Response({
-                    "message": "Request reject kar di — balance wapas add ho gaya.",
-                    "balance": str(wallet.balance)
+
+                    "success": True,
+
+                    "message":
+                    "Withdraw Rejected"
+
                 })
 
             elif action == "approve":
-                # Razorpay Payout fire karo
-                try:
-                    payout_response = fire_razorpay_payout(withdraw_req)
-                    payout_id = payout_response.get("id")
 
-                    if not payout_id:
-                        raise Exception(f"Payout failed: {payout_response}")
+                payout_response = create_payout(
+                    withdraw_request
+                )
 
-                    withdraw_req.status             = "paid"
-                    withdraw_req.razorpay_payout_id = payout_id
-                    withdraw_req.payout_response    = payout_response
-                    withdraw_req.admin_note         = admin_note
-                    withdraw_req.processed_at       = datetime.now()
-                    withdraw_req.save()
+                payout_id = payout_response.get(
+                    "id"
+                )
 
-                    # Transaction success karo
-                    Transaction.objects.filter(
-                        wallet=withdraw_req.wallet,
-                        note=f"Withdraw request #{withdraw_req.id}",
-                        status="pending"
-                    ).update(status="success")
+                if not payout_id:
 
-                    return Response({
-                        "message":   "Payout successful! Paisa user ke account me ja raha hai.",
-                        "payout_id": withdraw_req
-                    })
+                    wallet.balance += (
+                        withdraw_request.amount
+                    )
 
-                except Exception as e:
-                    withdraw_req.status     = "failed"
-                    withdraw_req.admin_note = str(e)
-                    withdraw_req.processed_at = datetime.datetime.now()
-                    withdraw_req.save()
-
-                    # Balance wapas karo
-                    wallet = withdraw_req.wallet
-                    wallet.balance += withdraw_req.amount
                     wallet.save()
 
-                    return Response({"error": f"Payout failed: {str(e)}"}, status=500)
+                    return Response({
 
-# ── 7. Transaction History ────────────────────────────────
-class TransactionHistoryView(APIView):
-    permission_classes = [IsAuthenticated]
+                        "success": False,
 
-    def get(self, request):
-        wallet   = get_or_create_wallet(request.user)
-        txns     = wallet.transactions.all().order_by("-created_at")
-        txn_type = request.query_params.get("type")
+                        "message":
+                        "Payout failed",
 
-        if txn_type in ["deposit", "withdraw"]:
-            txns = txns.filter(transaction_type=txn_type)
+                        "response":
+                        payout_response
 
-        return Response(TransactionSerializer(txns, many=True).data)
+                    }, status=500)
 
-# Admin manually paid mark kare
+                withdraw_request.status = (
+                    "paid"
+                )
+
+                withdraw_request.admin_note = (
+                    admin_note
+                )
+
+                withdraw_request.processed_at = (
+                    timezone.now()
+                )
+
+                withdraw_request.razorpay_payout_id = (
+                    payout_id
+                )
+
+                withdraw_request.payout_response = (
+                    payout_response
+                )
+
+                withdraw_request.save()
+
+                Transaction.objects.filter(
+
+                    wallet=wallet,
+
+                    reference=str(
+                        withdraw_request.id
+                    ),
+
+                    status="pending"
+
+                ).update(
+
+                    status="success"
+                )
+
+                return Response({
+
+                    "success": True,
+
+                    "message":
+                    "Withdraw Paid",
+
+                    "payout_id": payout_id
+
+                })
+
+
+# ─────────────────────────────────────────────────────────
+# Admin Manual Paid
+# ─────────────────────────────────────────────────────────
+
 class AdminMarkPaidView(APIView):
+
     permission_classes = [IsAdminUser]
 
     def post(self, request, pk):
+
         try:
-            withdraw_req = WithdrawRequest.objects.get(
-                id=pk, status="pending"
+
+            withdraw_request = (
+                WithdrawRequest.objects.get(
+
+                    id=pk,
+
+                    status="pending"
+                )
             )
+
         except WithdrawRequest.DoesNotExist:
-            return Response({"error": "Request nahi mili"}, status=404)
 
-        with db_transaction.atomic():
-            withdraw_req.status       = "paid"
-            withdraw_req.admin_note   = request.data.get("admin_note", "Manually paid")
-            withdraw_req.processed_at = timezone.now()
-            withdraw_req.save()
+            return Response({
 
-            Transaction.objects.filter(
-                wallet=withdraw_req.wallet,
-                note=f"Withdraw request #{withdraw_req.id}",
-                status="pending"
-            ).update(status="success")
+                "success": False,
+
+                "message":
+                "Withdraw request not found"
+
+            }, status=404)
+
+        withdraw_request.status = "paid"
+
+        withdraw_request.admin_note = (
+            request.data.get(
+                "admin_note",
+                "Manually Paid"
+            )
+        )
+
+        withdraw_request.processed_at = (
+            timezone.now()
+        )
+
+        withdraw_request.save()
+
+        Transaction.objects.filter(
+
+            wallet=withdraw_request.wallet,
+
+            reference=str(
+                withdraw_request.id
+            ),
+
+            status="pending"
+
+        ).update(
+
+            status="success"
+        )
 
         return Response({
-            "message": "Withdraw request paid mark ho gayi ✅",
-            "request_id": withdraw_req.id
+
+            "success": True,
+
+            "message":
+            "Marked as paid"
+
         })
