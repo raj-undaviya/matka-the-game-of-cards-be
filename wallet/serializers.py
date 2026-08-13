@@ -27,6 +27,15 @@ class DepositInitSerializer(serializers.Serializer):
     )
 
 
+class PhonePeVerifySerializer(serializers.Serializer):
+    merchantTransactionId = serializers.CharField()
+    transactionId = serializers.CharField(required=False, allow_blank=True)
+    code = serializers.CharField(required=False, allow_blank=True)
+    amount = serializers.IntegerField(required=False)
+    merchantId = serializers.CharField(required=False, allow_blank=True)
+    state = serializers.CharField(required=False, allow_blank=True)
+
+
 class WithdrawSerializer(serializers.Serializer):
     amount = serializers.DecimalField(max_digits=12, decimal_places=2, min_value=1)
     note   = serializers.CharField(required=False, allow_blank=True)

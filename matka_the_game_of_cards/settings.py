@@ -202,10 +202,10 @@ EMAIL_HOST_PASSWORD = 'iryccrgewlumzzch'       # ← 16-digit Gmail App Password
 DEFAULT_FROM_EMAIL = EMAIL_HOST_USER
 
 
-RAZORPAY_KEY_ID = os.getenv('RAZORPAY_KEY_ID')
-RAZORPAY_KEY_SECRET = os.getenv('RAZORPAY_KEY_SECRET')
-RAZORPAY_ACCOUNT_NUMBER = os.getenv('RAZORPAY_ACCOUNT_NUMBER')
-RAZORPAY_PAYOUT_ENABLED = os.getenv('RAZORPAY_PAYOUT_ENABLED', 'False').lower() in ('true', '1', 't')
+PHONEPE_MERCHANT_ID = os.getenv('PHONEPE_MERCHANT_ID', 'MERCANT_ID')
+PHONEPE_SALT_KEY = os.getenv('PHONEPE_SALT_KEY', 'test-salt')
+PHONEPE_API_URL = os.getenv('PHONEPE_API_URL', 'https://api-preprod.phonepe.com/apis/pg-sandbox')
+PHONEPE_PAYOUT_ENABLED = os.getenv('PHONEPE_PAYOUT_ENABLED', 'False').lower() in ('true', '1', 't')
 
 CASHFREE_APP_ID = os.getenv('CASHFREE_APP_ID')
 CASHFREE_SECRET_KEY = os.getenv('CASHFREE_SECRET_KEY')
