@@ -130,7 +130,7 @@ WSGI_APPLICATION = 'matka_the_game_of_cards.wsgi.application'
 
 DATABASES = {
     'default': dj_database_url.parse(
-        url=os.getenv('DATABASE_URL'),
+        url=os.getenv('DATABASE_URL'), 
         conn_max_age=600,
         ssl_require=True
     ),
@@ -206,6 +206,11 @@ RAZORPAY_KEY_ID = os.getenv('RAZORPAY_KEY_ID')
 RAZORPAY_KEY_SECRET = os.getenv('RAZORPAY_KEY_SECRET')
 RAZORPAY_ACCOUNT_NUMBER = os.getenv('RAZORPAY_ACCOUNT_NUMBER')
 RAZORPAY_PAYOUT_ENABLED = os.getenv('RAZORPAY_PAYOUT_ENABLED', 'False').lower() in ('true', '1', 't')
+
+CASHFREE_APP_ID = os.getenv('CASHFREE_APP_ID')
+CASHFREE_SECRET_KEY = os.getenv('CASHFREE_SECRET_KEY')
+CASHFREE_MODE = os.getenv('CASHFREE_MODE', 'sandbox')
+CASHFREE_API_VERSION = os.getenv('CASHFREE_API_VERSION', '2022-01-01')
 
 # settings.py
 CELERY_BROKER_URL = 'redis://localhost:6379/0'

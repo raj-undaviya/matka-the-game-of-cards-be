@@ -20,6 +20,11 @@ class TransactionSerializer(serializers.ModelSerializer):
 
 class DepositInitSerializer(serializers.Serializer):
     amount = serializers.DecimalField(max_digits=12, decimal_places=2, min_value=1)
+    provider = serializers.ChoiceField(
+        choices=[('razorpay', 'razorpay'), ('cashfree', 'cashfree')],
+        default='razorpay',
+        required=False,
+    )
 
 
 class WithdrawSerializer(serializers.Serializer):
@@ -27,10 +32,17 @@ class WithdrawSerializer(serializers.Serializer):
     note   = serializers.CharField(required=False, allow_blank=True)
 
 
-class RazorpayVerifySerializer(serializers.Serializer):
-    razorpay_order_id   = serializers.CharField()
-    razorpay_payment_id = serializers.CharField()
-    razorpay_signature  = serializers.CharField()
+class DepositVerifySerializer(serializers.Serializer):
+    provider = serializers.ChoiceField(
+        choices=[('razorpay', 'razorpay'), ('cashfree', 'cashfree')],
+        default='razorpay'
+    )
+    razorpay_order_id   = serializers.CharField(required=False, allow_blank=True)
+    razorpay_payment_id = serializers.CharField(required=False, allow_blank=True)
+    razorpay_signature  = serializers.CharField(required=False, allow_blank=True)
+    order_id = serializers.CharField(required=False, allow_blank=True)
+    payment_session_id = serializers.CharField(required=False, allow_blank=True)
+    result = serializers.JSONField(required=False)
 
 # ── Withdraw Request Serializers ──────────────────────────
 class WithdrawRequestSerializer(serializers.ModelSerializer):

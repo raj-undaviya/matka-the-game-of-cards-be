@@ -1,5 +1,7 @@
 import datetime
 from time import timezone
+import json
+import uuid
 
 import razorpay
 import hmac
@@ -16,8 +18,8 @@ from .models import Wallet, Transaction, WithdrawRequest
 
 from .serializers import (
     WalletSerializer, TransactionSerializer,
-    DepositInitSerializer, WithdrawSerializer,
-    RazorpayVerifySerializer, WithdrawRequestSerializer,
+    DepositInitSerializer, DepositVerifySerializer,
+    WithdrawSerializer, WithdrawRequestSerializer,
     AdminWithdrawActionSerializer
 )
 
@@ -29,6 +31,94 @@ rz_client = razorpay.Client(
 def get_or_create_wallet(user):
     wallet, _ = Wallet.objects.get_or_create(user=user)
     return wallet
+
+
+def cashfree_base_url():
+    if settings.CASHFREE_MODE and settings.CASHFREE_MODE.lower() == 'production':
+        return 'https://api.cashfree.com'
+    return 'https://sandbox.cashfree.com'
+
+
+def create_cashfree_order(amount, user):
+    if not settings.CASHFREE_APP_ID or not settings.CASHFREE_SECRET_KEY:
+        raise ValueError('Cashfree credentials not configured')
+
+    order_id = f"cf_{uuid.uuid4().hex[:18]}"
+    customer_details = {
+        'customer_id': str(user.id),
+        'customer_email': user.email or f'user{user.id}@example.com',
+        'customer_phone': getattr(user, 'phone_number', '9999999999'),
+    }
+
+    body = {
+        'order_id': order_id,
+        'order_amount': str(amount),
+        'order_currency': 'INR',
+        'customer_details': customer_details,
+        'order_note': f'Matka deposit for {user.username}'
+    }
+
+    headers = {
+        'Content-Type': 'application/json',
+        'x-client-id': settings.CASHFREE_APP_ID,
+        'x-client-secret': settings.CASHFREE_SECRET_KEY,
+        'x-api-version': getattr(settings, 'CASHFREE_API_VERSION', '2022-01-01'),
+    }
+
+    response = requests.post(
+        f"{cashfree_base_url()}/pg/orders",
+        json=body,
+        headers=headers,
+        timeout=20,
+    )
+    try:
+        data = response.json()
+    except Exception:
+        data = {'raw_text': response.text}
+
+    # Treat a valid order response as success even when Cashfree does not return a top-level status field.
+    if response.status_code in (200, 201) and (
+        data.get('order_id') or data.get('data', {}).get('order_id')
+    ):
+        return data, response.status_code
+
+    return data, response.status_code
+
+
+def create_cashfree_payment_session(order_id, amount, user):
+    headers = {
+        'Content-Type': 'application/json',
+        'x-client-id': settings.CASHFREE_APP_ID,
+        'x-client-secret': settings.CASHFREE_SECRET_KEY,
+        'x-api-version': getattr(settings, 'CASHFREE_API_VERSION', '2022-01-01'),
+    }
+
+    customer_details = {
+        'customer_id': str(user.id),
+        'customer_email': user.email or f'user{user.id}@example.com',
+        'customer_phone': getattr(user, 'phone_number', '9999999999'),
+    }
+
+    body = {
+        'order_id': order_id,
+        'order_amount': str(amount),
+        'order_currency': 'INR',
+        'customer_details': customer_details,
+    }
+
+    response = requests.post(
+        f"{cashfree_base_url()}/pg/orders/{order_id}/session",
+        json=body,
+        headers=headers,
+        timeout=20,
+    )
+    try:
+        data = response.json()
+    except Exception:
+        data = {'raw_text': response.text}
+
+    return data, response.status_code
+
 
 def fire_razorpay_payout(withdraw_request):
     """Razorpay Payout API call karo."""
@@ -130,7 +220,79 @@ class DepositInitView(APIView):
             return Response(ser.errors, status=400)
 
         amount = ser.validated_data["amount"]            
+        provider = ser.validated_data.get("provider", "razorpay")
         wallet = get_or_create_wallet(request.user)     
+
+        if provider == 'cashfree':
+            cashfree_order, ord_status = create_cashfree_order(amount, request.user)
+            order_id = (
+                cashfree_order.get('order_id')
+                or cashfree_order.get('data', {}).get('order_id')
+                or cashfree_order.get('data', {}).get('orderId')
+            )
+            payment_link = (
+                cashfree_order.get('payment_link')
+                or cashfree_order.get('paymentLink')
+                or cashfree_order.get('paymentURL')
+                or cashfree_order.get('data', {}).get('payment_link')
+                or cashfree_order.get('data', {}).get('paymentLink')
+                or cashfree_order.get('data', {}).get('url')
+            )
+
+            if ord_status not in (200, 201) or not order_id:
+                return Response({"error": "Cashfree order creation failed", "details": cashfree_order}, status=ord_status or 400)
+
+            session_id = None
+            payment_url = payment_link
+
+            payment_session, sess_status = create_cashfree_payment_session(order_id, amount, request.user)
+            if sess_status in (200, 201):
+                session_id = (
+                    payment_session.get('payment_session_id')
+                    or payment_session.get('paymentSessionId')
+                    or payment_session.get('payment_sessionId')
+                    or payment_session.get('paymentSessionID')
+                    or payment_session.get('data', {}).get('payment_session_id')
+                    or payment_session.get('data', {}).get('paymentSessionId')
+                    or payment_session.get('data', {}).get('session_id')
+                    or payment_session.get('data', {}).get('sessionId')
+                    or payment_session.get('data', {}).get('id')
+                )
+                payment_url = payment_url or (
+                    payment_session.get('payment_url')
+                    or payment_session.get('paymentUrl')
+                    or payment_session.get('paymentURL')
+                    or payment_session.get('data', {}).get('payment_url')
+                    or payment_session.get('data', {}).get('paymentUrl')
+                    or payment_session.get('data', {}).get('url')
+                )
+
+            if not session_id and not payment_url:
+                return Response({"error": "Cashfree checkout initialization failed", "details": {"order": cashfree_order, "session": payment_session}}, status=400)
+
+            txn = Transaction.objects.create(
+                wallet=wallet,
+                transaction_type="deposit",
+                amount=amount,
+                status="pending",
+                provider='cashfree',
+                cashfree_order_id=order_id,
+                cashfree_payment_session_id=session_id
+            )
+
+            return Response({
+                "order_id": order_id,
+                "payment_session_id": session_id,
+                "paymentSessionId": session_id,
+                "payment_url": payment_url,
+                "paymentUrl": payment_url,
+                "payment_link": payment_link,
+                "amount": str(amount),
+                "currency": "INR",
+                "key_id": settings.CASHFREE_APP_ID,
+                "transaction_id": txn.id,
+                "mode": settings.CASHFREE_MODE or 'sandbox',
+            }, status=status.HTTP_201_CREATED)
 
         rz_order = rz_client.order.create({
             "amount":          int(amount) * 100,  # paise me
@@ -163,13 +325,50 @@ class DepositVerifyView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        ser = RazorpayVerifySerializer(data=request.data)
+        ser = DepositVerifySerializer(data=request.data)
         if not ser.is_valid():
             return Response(ser.errors, status=400)
 
-        order_id   = ser.validated_data["razorpay_order_id"]
-        payment_id = ser.validated_data["razorpay_payment_id"]
-        signature  = ser.validated_data["razorpay_signature"]
+        provider = ser.validated_data.get('provider', 'razorpay')
+
+        if provider == 'cashfree':
+            order_id = ser.validated_data.get('order_id')
+            payment_session_id = ser.validated_data.get('payment_session_id')
+            result = ser.validated_data.get('result')
+
+            if not order_id or not payment_session_id or not result:
+                return Response({"error": "Cashfree verification details missing."}, status=400)
+
+            try:
+                with db_transaction.atomic():
+                    txn = Transaction.objects.select_for_update().get(
+                        cashfree_order_id=order_id,
+                        cashfree_payment_session_id=payment_session_id,
+                        wallet__user=request.user,
+                        status="pending"
+                    )
+                    txn.cashfree_payment_id = result.get('payment_id') or result.get('paymentSessionId') or result.get('reference_id')
+                    txn.status = "success"
+                    txn.save()
+
+                    wallet = txn.wallet
+                    wallet.balance += txn.amount
+                    wallet.save()
+
+            except Transaction.DoesNotExist:
+                return Response({"error": "Transaction nahi mili"}, status=404)
+
+            return Response({
+                "message": "Deposit successful!",
+                "balance": str(txn.wallet.balance)
+            })
+
+        order_id   = ser.validated_data.get("razorpay_order_id")
+        payment_id = ser.validated_data.get("razorpay_payment_id")
+        signature  = ser.validated_data.get("razorpay_signature")
+
+        if not order_id or not payment_id or not signature:
+            return Response({"error": "Razorpay verification details missing."}, status=400)
 
         body     = f"{order_id}|{payment_id}"
         expected = hmac.new(

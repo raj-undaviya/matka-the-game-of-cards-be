@@ -35,8 +35,16 @@ class Transaction(models.Model):
     balance_before       = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
     balance_after        = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
     status               = models.CharField(max_length=10, choices=STATUS_CHOICES, default="pending")
+    provider             = models.CharField(
+        max_length=20,
+        choices=[('razorpay', 'razorpay'), ('cashfree', 'cashfree')],
+        default='razorpay'
+    )
     razorpay_order_id    = models.CharField(max_length=100, blank=True, null=True)
     razorpay_payment_id  = models.CharField(max_length=100, blank=True, null=True)
+    cashfree_order_id    = models.CharField(max_length=100, blank=True, null=True)
+    cashfree_payment_id  = models.CharField(max_length=100, blank=True, null=True)
+    cashfree_payment_session_id = models.CharField(max_length=200, blank=True, null=True)
     # reference: bet_id ya round_id (Matka ke liye)
     reference            = models.CharField(max_length=100, blank=True)
     note                 = models.TextField(blank=True, null=True)
