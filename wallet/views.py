@@ -167,9 +167,13 @@ class DepositInitView(APIView):
 
     def post(self, request):
 
+        ser = DepositInitSerializer(data=request.data)
+        if not ser.is_valid():
+            return Response(ser.errors, status=400)
+
         amount = ser.validated_data["amount"]            
         provider = ser.validated_data.get("provider", "razorpay")
-        wallet = get_or_create_wallet(request.user)     
+        wallet = get_wallet(request.user)     
 
         if provider == 'cashfree':
             cashfree_order, ord_status = create_cashfree_order(amount, request.user)
@@ -257,7 +261,7 @@ class DepositInitView(APIView):
             razorpay_order_id=rz_order["id"]
         )
 
-        serializer.is_valid(raise_exception=True)
+        ser.is_valid(raise_exception=True)
 
         amount = serializer.validated_data["amount"]
 
