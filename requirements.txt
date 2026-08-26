@@ -27,9 +27,11 @@ Django==6.0.5
 django-celery-beat==2.9.0
 django-cors-headers==4.9.0
 django-environ==0.13.0
+django-mongodb-backend==6.0.4
 django-timezone-field==7.2.1
 djangorestframework==3.17.1
 djangorestframework_simplejwt==5.5.1
+dnspython==2.8.0
 dotenv==0.9.9
 hyperlink==21.0.0
 idna==3.15
