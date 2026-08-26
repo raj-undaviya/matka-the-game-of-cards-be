@@ -39,9 +39,9 @@ AUTH_USER_MODEL = 'auths.User'
 # Application definition
 
 INSTALLED_APPS = [
-    'django.contrib.admin',
-    'django.contrib.auth',
-    'django.contrib.contenttypes',
+    'matka_the_game_of_cards.apps.MongoAdminConfig',
+    'matka_the_game_of_cards.apps.MongoAuthConfig',
+    'matka_the_game_of_cards.apps.MongoContentTypesConfig',
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
@@ -129,12 +129,21 @@ WSGI_APPLICATION = 'matka_the_game_of_cards.wsgi.application'
 # }
 
 DATABASES = {
-    'default': dj_database_url.parse(
-        url=os.getenv('DATABASE_URL'), 
-        conn_max_age=600,
-        ssl_require=True
-    ),
+    'default': {
+        'ENGINE': 'django_mongodb_backend',
+        'HOST': os.getenv('MONGODB_URI', 'mongodb://localhost:27017/'),
+        'NAME': os.getenv('MONGODB_NAME', 'matka_db'),
+    },
+    'sqlite': {
+        'ENGINE': 'django.db.backends.sqlite3',
+        'NAME': BASE_DIR / 'db.sqlite3',
+    }
 }
+
+DATABASE_ROUTERS = ['matka_the_game_of_cards.routers.DatabaseRouter']
+
+DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+
 
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
@@ -247,3 +256,10 @@ AWS_AMI_ID            = os.getenv("AWS_AMI_ID")           # ami-0xxxxxxxx
 AWS_KEY_PAIR          = os.getenv("AWS_KEY_PAIR")          # "matka-game-key"
 AWS_SECURITY_GROUP_ID = os.getenv("AWS_SECURITY_GROUP_ID") # "sg-xxxxxxxx"
 AWS_SUBNET_ID         = os.getenv("AWS_SUBNET_ID")         # "subnet-xxxxxxxx"
+
+# ── MongoDB Migrations for Contrib Apps ──
+MIGRATION_MODULES = {
+    'admin': 'mongo_migrations.admin',
+    'auth': 'mongo_migrations.auth',
+    'contenttypes': 'mongo_migrations.contenttypes',
+}
