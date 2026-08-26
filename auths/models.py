@@ -23,6 +23,11 @@ class User(AbstractUser):
     # Email verify status
     is_email_verified = models.BooleanField(default=False) 
 
+    # Terms & Conditions acceptance details
+    terms_accepted = models.BooleanField(default=False)
+    terms_accepted_version = models.CharField(max_length=50, blank=True, null=True)
+    terms_accepted_date = models.DateTimeField(blank=True, null=True)
+
     def __str__(self):
         return f"{self.username} - {self.email}"
 

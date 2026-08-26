@@ -29,6 +29,13 @@ class RegisterView(APIView):
 
     permission_classes = [AllowAny]
     def post(self, request):
+        terms_accepted = request.data.get("termsAccepted")
+        if not terms_accepted or terms_accepted not in [True, 'true']:
+            return Response(
+                {"error": "Please accept the Terms & Conditions and Privacy Policy to continue."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
         serializer = RegisterSerializer(data=request.data)
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -308,3 +315,15 @@ class TokenRefreshView(APIView):
             return Response({"access": str(refresh.access_token)}, status=status.HTTP_200_OK)
         except Exception:
             return Response({"error": "Invalid or expired refresh token."}, status=status.HTTP_400_BAD_REQUEST)
+
+
+def serve_policy_file(request, filename):
+    import os
+    from django.http import FileResponse, Http404
+    from django.conf import settings
+    
+    landing_page_dir = settings.BASE_DIR.parent / 'landing-page'
+    filepath = landing_page_dir / filename
+    if os.path.exists(filepath):
+        return FileResponse(open(filepath, 'rb'), content_type='text/html')
+    raise Http404("File not found")

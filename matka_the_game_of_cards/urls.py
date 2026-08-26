@@ -16,9 +16,12 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import path, include
+from auths.views import serve_policy_file
 
 urlpatterns = [
     path('admin/', admin.site.urls),
+    path('terms.html', serve_policy_file, {'filename': 'terms.html'}, name='terms_html'),
+    path('privacy.html', serve_policy_file, {'filename': 'privacy.html'}, name='privacy_html'),
     path('api/auth/', include('auths.urls')),  
     path('api/wallet/', include('wallet.urls')),
     path('api/game/', include('game.urls')),

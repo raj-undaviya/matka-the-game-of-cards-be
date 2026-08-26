@@ -23,10 +23,29 @@ class RegisterSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         validated_data.pop("password2")
+        
+        from django.apps import apps
+        from django.utils import timezone
+        terms_version = "v1.0"
+        try:
+            PolicyVersion = apps.get_model('policies', 'PolicyVersion')
+            PolicyDocument = apps.get_model('policies', 'PolicyDocument')
+            latest_terms = PolicyVersion.objects.filter(
+                document__doc_type=PolicyDocument.DocType.TERMS_OF_SERVICE,
+                document__is_published=True
+            ).order_by('-created_at').first()
+            if latest_terms:
+                terms_version = latest_terms.version_number
+        except Exception:
+            pass
+
         user = User.objects.create_user(
             username=validated_data["username"],
             email=validated_data.get("email", ""),
             password=validated_data["password"],
+            terms_accepted=True,
+            terms_accepted_version=terms_version,
+            terms_accepted_date=timezone.now(),
         )
         return user
 
