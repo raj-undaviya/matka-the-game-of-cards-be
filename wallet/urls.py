@@ -20,6 +20,6 @@ urlpatterns = [
 
     # Admin APIs
     path("admin-panel/withdraws/",              AdminWithdrawListView.as_view(),          name="admin-withdraw-list"),
-    path("admin-panel/withdraws/<int:pk>/action/", AdminWithdrawActionView.as_view(),     name="admin-withdraw-action"),
-    path("admin-panel/withdraws/<int:pk>/mark-paid/", AdminMarkPaidView.as_view(), name="admin-mark-paid"),
+    path("admin-panel/withdraws/<str:pk>/action/", AdminWithdrawActionView.as_view(),     name="admin-withdraw-action"),
+    path("admin-panel/withdraws/<str:pk>/mark-paid/", AdminMarkPaidView.as_view(), name="admin-mark-paid"),
 ]
