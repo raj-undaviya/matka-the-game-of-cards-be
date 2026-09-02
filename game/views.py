@@ -169,12 +169,15 @@ class PlaceBetView(APIView):
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
         data = serializer.validated_data
+        print("Serializer Data --->", data)
         success, result = RoundService.place_bet(
             round_id=str(data['round_id']),
             user=request.user,
             selected_numbers=data['selected_numbers'],
             entry_fee=data['entry_fee']
         )
+        print("Success ->", success)
+        print("Result ->", result)
 
         if not success:
             return Response({"error": result}, status=status.HTTP_400_BAD_REQUEST)

@@ -14,6 +14,8 @@ class RoundListSerializer(serializers.ModelSerializer):
     entry_fee       = serializers.SerializerMethodField()
     max_slots       = serializers.SerializerMethodField()
     reward_info     = serializers.SerializerMethodField()
+    pool_name       = serializers.SerializerMethodField()
+    pool_id         = serializers.SerializerMethodField()
 
     class Meta:
         model  = Round
@@ -21,15 +23,20 @@ class RoundListSerializer(serializers.ModelSerializer):
             'id', 'variation', 'status',
             'seed_hash',          # provably fair — public
             'entry_fee', 'max_slots', 'slots_filled', 'slots_available',
-            'reward_info', 'draw_at', 'created_at',
+            'reward_info', 'draw_at', 'created_at', 'pool',
+            'pool_name', 'pool_id',
         ]
         # server_seed EXCLUDED — never expose
 
     def get_entry_fee(self, obj):
+        if obj.pool:
+            return obj.pool.entry_fee
         config = GAME_CONFIGS[GameVariation(obj.variation)]
         return config.entry_fee
 
     def get_max_slots(self, obj):
+        if obj.pool:
+            return obj.pool.max_players
         config = GAME_CONFIGS[GameVariation(obj.variation)]
         return config.max_slots
 
@@ -39,6 +46,21 @@ class RoundListSerializer(serializers.ModelSerializer):
         if config.reward_multiplier_small:
             info["multiplier_small"] = config.reward_multiplier_small
         return info
+
+    def get_pool_name(self, obj):
+        if obj.pool:
+            return obj.pool.name
+        names = {
+            'V1': 'Single Card Arena',
+            'V2': 'Pair Selection Arena',
+            'V3': 'Trio Game Arena',
+            'V4': 'Last Digit Sum Arena',
+            'V5': 'Lucky Draw Jackpot',
+        }
+        return names.get(obj.variation, 'Standard Arena')
+
+    def get_pool_id(self, obj):
+        return str(obj.pool.id) if obj.pool else None
 
 
 class RoundDetailSerializer(RoundListSerializer):
