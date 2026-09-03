@@ -131,13 +131,13 @@ WSGI_APPLICATION = 'matka_the_game_of_cards.wsgi.application'
 DATABASES = {
     'default': {
         'ENGINE': 'django_mongodb_backend',
-        'HOST': os.getenv('MONGODB_URI', 'mongodb://localhost:27017/'),
-        'NAME': os.getenv('MONGODB_NAME', 'matka_db'),
-    },
-    'sqlite': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+        'HOST': os.getenv('MONGODB_URI'),
+        'NAME': os.getenv('MONGODB_NAME'),
     }
+    # 'sqlite': {
+    #     'ENGINE': 'django.db.backends.sqlite3',
+    #     'NAME': BASE_DIR / 'db.sqlite3',
+    # }
 }
 
 DATABASE_ROUTERS = ['matka_the_game_of_cards.routers.DatabaseRouter']
@@ -222,6 +222,8 @@ CASHFREE_PAYOUT_CLIENT_ID = os.getenv('CASHFREE_PAYOUT_CLIENT_ID')
 CASHFREE_PAYOUT_CLIENT_SECRET_KEY = os.getenv('CASHFREE_PAYOUT_CLIENT_SECRET_KEY')
 CASHFREE_MODE = os.getenv('CASHFREE_MODE', 'sandbox')
 CASHFREE_API_VERSION = os.getenv('CASHFREE_API_VERSION', '2022-01-01')
+CASHFREE_PAYOUT_MOCK = os.getenv('CASHFREE_PAYOUT_MOCK', 'False').lower() in ('true', '1', 't')
+
 
 # settings.py
 CELERY_BROKER_URL = 'redis://localhost:6379/0'

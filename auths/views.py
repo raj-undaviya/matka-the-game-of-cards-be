@@ -70,7 +70,7 @@ class LoginView(APIView):
         user = User.objects.filter(email=email).first()
 
         if user and user.check_password(password):
-            if not user.is_email_verified:
+            if not user.is_superuser and not user.is_email_verified:
                 # Purane OTPs invalidate karo
                 PasswordResetOTP.objects.filter(user=user, is_used=False).update(is_used=True)
 

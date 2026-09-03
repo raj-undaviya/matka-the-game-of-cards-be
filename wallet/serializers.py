@@ -13,8 +13,11 @@ class TransactionSerializer(serializers.ModelSerializer):
         model  = Transaction
         fields = [
             "id", "transaction_type", "amount",
-            "status", "razorpay_order_id",
-            "razorpay_payment_id", "note", "created_at"
+            "balance_before", "balance_after",
+            "status", "provider",
+            "cashfree_order_id", "cashfree_payment_id",
+            "razorpay_order_id", "razorpay_payment_id",
+            "reference", "note", "created_at"
         ]
 
 
@@ -55,10 +58,14 @@ class DepositVerifySerializer(serializers.Serializer):
 
 # ── Withdraw Request Serializers ──────────────────────────
 class WithdrawRequestSerializer(serializers.ModelSerializer):
+    wallet_user = serializers.CharField(source="wallet.user.username", read_only=True)
+    user_email  = serializers.CharField(source="wallet.user.email", read_only=True)
+    user_id     = serializers.CharField(source="wallet.user.id", read_only=True)
+
     class Meta:
         model  = WithdrawRequest
         fields = [
-            "id", "amount", "status", "mode",
+            "id", "wallet_user", "user_email", "user_id", "amount", "status", "mode",
             "upi_id", "account_number", "ifsc_code", "account_holder",
             "razorpay_payout_id", "note", "admin_note",
             "requested_at", "processed_at"

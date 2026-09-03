@@ -116,10 +116,85 @@ class RoundListView(APIView):
 
     def get(self, request):
         variation = request.query_params.get('variation')
-        qs = Round.objects.filter(status=Round.Status.BETTING_OPEN)
         if variation:
-            qs = qs.filter(variation=variation)
+            PoolService.sync_pools_for_variation(variation)
+            qs = Round.objects.filter(status=Round.Status.BETTING_OPEN, variation=variation).order_by('-created_at')
+        else:
+            for v in ['V1', 'V2', 'V3', 'V4', 'V5']:
+                PoolService.sync_pools_for_variation(v)
+            qs = Round.objects.filter(status=Round.Status.BETTING_OPEN).order_by('-created_at')
+
         serializer = RoundListSerializer(qs, many=True)
+        return Response(serializer.data)
+
+
+class GameListView(APIView):
+    """
+    GET /api/games/ or GET /api/game/games/
+    List active customized games with image, name, subtitle, rewards multiplier, etc.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        games = Game.objects.filter(is_active=True).order_by('created_at')
+        if not games.exists():
+            defaults = [
+                {
+                    'name': 'SINGLE CARD GAME',
+                    'variation': 'V1',
+                    'sub_title': 'ENTRY FEES.🪙100',
+                    'rewards': '30x',
+                    'pool_value': '🪙2,109',
+                    'reward_label': '10x',
+                    'bg_colors': ['#1C1C1C', '#000000'],
+                    'sphere_colors': ['#FF3B30', '#C20005', '#5E0002']
+                },
+                {
+                    'name': 'PAIR SELECTION',
+                    'variation': 'V2',
+                    'sub_title': 'ENTRY FEES.🪙100',
+                    'rewards': '20x',
+                    'pool_value': '🪙2,105',
+                    'reward_label': '20x',
+                    'bg_colors': ['#1C1C1C', '#000000'],
+                    'sphere_colors': ['#06B6D4', '#0891B2', '#003d4d']
+                },
+                {
+                    'name': 'TRIO GAME TION AU',
+                    'variation': 'V3',
+                    'sub_title': 'ENTRY FEES.🪙100',
+                    'rewards': '32x',
+                    'pool_value': '🪙2,105',
+                    'reward_label': '50x',
+                    'bg_colors': ['#1C1C1C', '#000000'],
+                    'sphere_colors': ['#2EA043', '#16752E', '#093D15']
+                },
+                {
+                    'name': 'LAST DIGIT SUM',
+                    'variation': 'V4',
+                    'sub_title': 'ENTRY FEES.🪙100',
+                    'rewards': '33x',
+                    'pool_value': '🪙875',
+                    'reward_label': '80x',
+                    'bg_colors': ['#1C1C1C', '#000000'],
+                    'sphere_colors': ['#FF3B30', '#C20005', '#5E0002']
+                },
+                {
+                    'name': 'LUCKLY DRAW JACCPOT',
+                    'variation': 'V5',
+                    'sub_title': 'ENTRY FEES.🪙100',
+                    'rewards': '23x',
+                    'pool_value': '🪙805',
+                    'reward_label': '80x',
+                    'bg_colors': ['#1C1C1C', '#000000'],
+                    'sphere_colors': ['#7C3AED', '#5B21B6', '#3B0764']
+                },
+            ]
+            for g in defaults:
+                Game.objects.create(**g)
+            games = Game.objects.filter(is_active=True).order_by('created_at')
+
+        serializer = GameSerializer(games, many=True)
         return Response(serializer.data)
 
 
@@ -1490,7 +1565,7 @@ def _time_ago(dt):
 # ══════════════════════════════════════════
 
 class AdminGameCreateView(APIView):
-    permission_classes = [IsAdminUser]
+    permission_classes = [IsAuthenticated]
 
     def get(self, request):
         games = Game.objects.all().order_by('-created_at')
@@ -1506,7 +1581,7 @@ class AdminGameCreateView(APIView):
 
 
 class AdminPoolCreateView(APIView):
-    permission_classes = [IsAdminUser]
+    permission_classes = [IsAuthenticated]
 
     def post(self, request):
         serializer = PoolSerializer(data=request.data)
@@ -1517,7 +1592,7 @@ class AdminPoolCreateView(APIView):
 
 
 class AdminPoolStartView(APIView):
-    permission_classes = [IsAdminUser]
+    permission_classes = [IsAuthenticated]
 
     def post(self, request, pool_id):
         success = PoolService.start_pool(pool_id)
@@ -1530,7 +1605,15 @@ class PoolListView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        pools = Pool.objects.all().order_by('-created_at')
+        variation = request.query_params.get('variation')
+        if variation:
+            PoolService.sync_pools_for_variation(variation)
+            pools = Pool.objects.filter(game__variation=variation, status=Pool.Status.UPCOMING).order_by('-slot_number')
+        else:
+            for v in ['V1', 'V2', 'V3', 'V4', 'V5']:
+                PoolService.sync_pools_for_variation(v)
+            pools = Pool.objects.filter(status=Pool.Status.UPCOMING).order_by('-created_at')
+
         serializer = PoolSerializer(pools, many=True)
         return Response(serializer.data)
 
@@ -1550,7 +1633,16 @@ class PoolLeaderboardView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, pool_id):
-        pool = get_object_or_404(Pool, id=pool_id)
+        pool = None
+        try:
+            pool = Pool.objects.get(id=pool_id)
+        except Exception:
+            try:
+                from bson import ObjectId
+                pool = Pool.objects.get(id=ObjectId(pool_id))
+            except Exception:
+                return Response({"error": "Pool not found."}, status=status.HTTP_404_NOT_FOUND)
+
         participants = pool.participants.all().order_by('rank', '-total_points', 'joined_at')
         serializer = PoolParticipantSerializer(participants, many=True)
         

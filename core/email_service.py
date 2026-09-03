@@ -222,7 +222,7 @@ class EmailService:
 
     # ── 10. Admin: Withdraw Approved ─────────────────────────────────────────
     @staticmethod
-    def send_withdraw_approved(user, withdraw_request) -> bool:
+    def send_withdraw_approved(user, withdraw_request, eta: str = "Within 24 hours") -> bool:
         """
         Admin ne withdraw approve kiya.
         Call: EmailService.send_withdraw_approved(user, withdraw_request)
@@ -234,13 +234,16 @@ class EmailService:
         elif withdraw_request.mode == "bank_account":
             bank_info = f"{withdraw_request.account_holder} — ****{str(withdraw_request.account_number)[-4:]}"
 
+        txn_id = withdraw_request.razorpay_payout_id or f"WD-{withdraw_request.id}"
+
         subject, html = EmailTemplates.admin_withdraw_approved(
             user_name=user.get_full_name() or user.username,
             amount=f"{withdraw_request.amount:,.2f}",
             currency="INR",
-            transaction_id=withdraw_request.razorpay_payout_id or "",
+            transaction_id=txn_id,
             approved_at=now,
             bank_account=bank_info,
+            eta=eta,
         )
         return _send(user.email, subject, html)
 
