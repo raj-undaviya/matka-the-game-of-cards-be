@@ -211,8 +211,7 @@ class RoundService:
             user=user,
             selected_numbers=selected_numbers,
             entry_fee=Decimal(str(entry_fee)),
-            status=Bet.Status.PENDING,
-            pool=round_obj.pool
+            status=Bet.Status.PENDING
         )
 
         new_count = current_count + 1
@@ -311,7 +310,7 @@ class RoundService:
             # Update participants' points
             for participant in pool.participants.all():
                 total_pts = Bet.objects.filter(
-                    pool=pool,
+                    round__pool=pool,
                     user=participant.user,
                     status=Bet.Status.WON
                 ).aggregate(total=Sum('points_earned'))['total'] or 0
