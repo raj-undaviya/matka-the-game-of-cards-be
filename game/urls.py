@@ -10,6 +10,7 @@ WebSocket (asgi.py mein add karo):
 from django.urls import path
 from .views import (
     # User APIs
+    GameListView,
     RoundListView, RoundCreateView, RoundDetailView,
     PlaceBetView, MyBetsView,
     WalletView, WalletTransactionView,
@@ -33,6 +34,7 @@ from .views import (
 urlpatterns = [
 
     # ── User APIs ──────────────────────────────────────────────────
+    path('games/',                    GameListView.as_view(),    name='game-list'),
     path('rounds/',                   RoundListView.as_view(),   name='round-list'),
     path('rounds/create/',            RoundCreateView.as_view(), name='round-create'),
     path('rounds/<uuid:round_id>/',   RoundDetailView.as_view(), name='round-detail'),

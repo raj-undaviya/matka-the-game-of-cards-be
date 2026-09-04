@@ -2,14 +2,16 @@
 Matka Game — Django Models
 ===========================
 Tables:
-  Round      → ek game session (V1-V5)
-  Bet        → user ki ek entry in a round
-  Wallet     → user ka balance
-  WalletTx   → har transaction ka record (audit trail)
+  Game             → Game template (Single Card, Pair, Trio, etc.)
+  Pool             → Dream11 style contest pool
+  PoolParticipant  → User entry in a pool
+  Round            → Game session (V1-V5)
+  Bet              → User entry in a round
 """
 from django.db import models
 from django.contrib.auth import get_user_model
 from django.core.validators import MinValueValidator
+from decimal import Decimal
 import uuid
 
 User = get_user_model()
@@ -25,6 +27,13 @@ class Game(models.Model):
         ('V5', 'Jackpot')
     ])
     description = models.TextField(blank=True)
+    sub_title = models.CharField(max_length=100, blank=True, default='ENTRY FEES.🪙100')
+    rewards = models.CharField(max_length=50, blank=True, default='30x')
+    pool_value = models.CharField(max_length=50, blank=True, default='🪙2,109')
+    reward_label = models.CharField(max_length=50, blank=True, default='10x')
+    image_url = models.CharField(max_length=500, blank=True, default='')
+    bg_colors = models.JSONField(default=list, blank=True)
+    sphere_colors = models.JSONField(default=list, blank=True)
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -40,18 +49,22 @@ class Pool(models.Model):
 
     game = models.ForeignKey(Game, on_delete=models.CASCADE, related_name='pools')
     name = models.CharField(max_length=100)
+    slot_number = models.PositiveIntegerField(default=1)
     entry_fee = models.PositiveIntegerField(default=10)
+    win_prize = models.DecimalField(max_digits=12, decimal_places=2, default=0.00)
     max_players = models.PositiveIntegerField(default=100)
-    duration_minutes = models.PositiveIntegerField(default=5)
-    rounds_count = models.PositiveIntegerField(default=10)
+    duration_minutes = models.PositiveIntegerField(default=1)  # 1 min default countdown
+    rounds_count = models.PositiveIntegerField(default=1)
     round_duration_seconds = models.PositiveIntegerField(default=30)
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.UPCOMING)
+    is_recurring = models.BooleanField(default=True)
+    expires_at = models.DateTimeField(null=True, blank=True)  # Countdown target
     created_at = models.DateTimeField(auto_now_add=True)
     start_time = models.DateTimeField(null=True, blank=True)
     end_time = models.DateTimeField(null=True, blank=True)
 
     def __str__(self):
-        return f"{self.name} - Fee: ₹{self.entry_fee} [{self.status}]"
+        return f"{self.name} (Slot {self.slot_number}) - Fee: ₹{self.entry_fee} [{self.status}]"
 
 
 class PoolParticipant(models.Model):
@@ -94,15 +107,15 @@ class Round(models.Model):
     round_number   = models.PositiveIntegerField(default=1)
 
     # Provably fair — seed_hash is PUBLIC, server_seed is PRIVATE
-    server_seed    = models.CharField(max_length=64)   # Encrypted in prod (use django-encrypted-fields)
-    seed_hash      = models.CharField(max_length=64)   # SHA256(server_seed) — show to users
+    server_seed    = models.CharField(max_length=64)
+    seed_hash      = models.CharField(max_length=64)
 
     # Draw result
-    drawn_numbers  = models.JSONField(null=True, blank=True)   # e.g. [7] or [3, 8] or [5, 5, 5]
-    winners_data   = models.JSONField(null=True, blank=True)   # Full result snapshot
+    drawn_numbers  = models.JSONField(null=True, blank=True)
+    winners_data   = models.JSONField(null=True, blank=True)
 
     # Timing
-    draw_at        = models.DateTimeField(null=True, blank=True)   # V5 jackpot timer
+    draw_at        = models.DateTimeField(null=True, blank=True)
     created_at     = models.DateTimeField(auto_now_add=True)
     completed_at   = models.DateTimeField(null=True, blank=True)
 
@@ -144,21 +157,18 @@ class Bet(models.Model):
                                          related_name='bets')
     user             = models.ForeignKey(User, on_delete=models.PROTECT,
                                          related_name='bets')
-    selected_numbers = models.JSONField()          # [6] or [3,7] or [5,5,5]
+    selected_numbers = models.JSONField()
     entry_fee        = models.PositiveIntegerField()
     status           = models.CharField(max_length=10, choices=Status.choices,
                                         default=Status.PENDING)
-    reward_amount    = models.PositiveIntegerField(default=0)
-    win_type         = models.CharField(max_length=30, blank=True)
+    reward_amount    = models.DecimalField(max_digits=12, decimal_places=2,
+                                           default=Decimal('0.00'))
+    win_type         = models.CharField(max_length=20, null=True, blank=True)
+    points_earned    = models.IntegerField(default=0)
     placed_at        = models.DateTimeField(auto_now_add=True)
 
-    # Pool association and Points
-    pool             = models.ForeignKey(Pool, on_delete=models.CASCADE, null=True, blank=True, related_name='bets')
-    points_earned    = models.IntegerField(default=0)
-
     class Meta:
-        # One user, one bet per round (except V5 jackpot — handled in service layer)
-        ordering = ['placed_at']
+        ordering = ['-placed_at']
 
     def __str__(self):
-        return f"Bet by {self.user} on Round {str(self.round_id)[:8]} — {self.status}"
+        return f"Bet {str(self.id)[:8]} by {self.user.username} on Round {str(self.round.id)[:8]} — ₹{self.entry_fee}"

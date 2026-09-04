@@ -127,3 +127,19 @@ class WithdrawRequestAdmin(admin.ModelAdmin):
             color, obj.status.upper()
         )
     status_badge.short_description = 'Status'
+
+    def save_model(self, request, obj, form, change):
+        old_status = WithdrawRequest.objects.get(pk=obj.pk).status if change else None
+        super().save_model(request, obj, form, change)
+        if change and old_status != 'approved' and obj.status in ('approved', 'paid'):
+            try:
+                from .email_hooks import on_admin_withdraw_approved
+                on_admin_withdraw_approved(obj.wallet.user, obj)
+            except Exception as e:
+                print(f"Failed to send withdraw approved email: {e}")
+        elif change and old_status != 'rejected' and obj.status == 'rejected':
+            try:
+                from .email_hooks import on_admin_withdraw_rejected
+                on_admin_withdraw_rejected(obj.wallet.user, obj)
+            except Exception as e:
+                print(f"Failed to send withdraw rejected email: {e}")

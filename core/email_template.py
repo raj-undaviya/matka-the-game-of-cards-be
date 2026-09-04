@@ -559,11 +559,11 @@ class EmailTemplates:
     @classmethod
     def admin_withdraw_approved(cls, user_name: str, amount: str, currency: str = "INR",
                                   transaction_id: str = "", approved_at: str = "",
-                                  bank_account: str = "", eta: str = "1–3 business days") -> tuple:
+                                  bank_account: str = "", eta: str = "Within 24 hours") -> tuple:
         """
         Returns: (subject, html_body)
         """
-        subject = f"✅ Withdrawal Request Approved – {cls.APP_NAME}"
+        subject = f"✅ Withdrawal Request Approved (Within 24 Hours) – {cls.APP_NAME}"
         content = f"""
         <h2 class="email-title">Your Withdrawal Has Been Approved ✅</h2>
         <p class="email-subtitle">Admin has approved your withdrawal request.</p>
@@ -575,17 +575,17 @@ class EmailTemplates:
         <div class="info-card">
           {'<div class="info-row"><span class="info-label">Transaction ID</span><span class="info-value">' + transaction_id + '</span></div>' if transaction_id else ''}
           {'<div class="info-row"><span class="info-label">Approved At</span><span class="info-value">' + approved_at + '</span></div>' if approved_at else ''}
-          {'<div class="info-row"><span class="info-label">Bank Account</span><span class="info-value">' + bank_account + '</span></div>' if bank_account else ''}
+          {'<div class="info-row"><span class="info-label">Payment Mode / Details</span><span class="info-value">' + bank_account + '</span></div>' if bank_account else ''}
           <div class="info-row">
             <span class="info-label">Estimated Transfer</span>
-            <span class="info-value">{eta}</span>
+            <span class="info-value">Within 24 hours</span>
           </div>
           <div class="info-row">
             <span class="info-label">Status</span>
             <span class="info-value"><span class="status-badge badge-success">Approved</span></span>
           </div>
         </div>
-        <p>The funds will be transferred to your bank account within <strong>{eta}</strong>.</p>
+        <p>The funds will be transferred to your account within <strong>24 hours</strong>.</p>
         {_footer_note(f'Questions? Contact <a href="mailto:{cls.SUPPORT_EMAIL}">{cls.SUPPORT_EMAIL}</a>')}
         """
         return subject, _base_template(content, subject)

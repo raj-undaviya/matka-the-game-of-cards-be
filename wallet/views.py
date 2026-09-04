@@ -10,7 +10,8 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import (
     IsAuthenticated,
-    IsAdminUser
+    IsAdminUser,
+    AllowAny
 )
 from rest_framework import status
 
@@ -52,7 +53,107 @@ def cashfree_base_url():
     return 'https://sandbox.cashfree.com'
 
 
-def create_cashfree_order(amount, user):
+def check_cashfree_order_status(order_id):
+    if not settings.CASHFREE_APP_ID or not settings.CASHFREE_SECRET_KEY:
+        raise ValueError('Cashfree credentials not configured')
+
+    headers = {
+        'x-client-id': settings.CASHFREE_APP_ID,
+        'x-client-secret': settings.CASHFREE_SECRET_KEY,
+        'x-api-version': getattr(settings, 'CASHFREE_API_VERSION', '2022-01-01'),
+    }
+
+    url = f"{cashfree_base_url()}/pg/orders/{order_id}"
+    response = requests.get(url, headers=headers, timeout=20)
+    try:
+        data = response.json()
+    except Exception:
+        data = {'raw_text': response.text}
+
+    if response.status_code == 200:
+        return data, True
+    return data, False
+
+
+def cashfree_payout_base_url():
+    if settings.CASHFREE_MODE and settings.CASHFREE_MODE.lower() == 'production':
+        return 'https://api.cashfree.com/payout'
+    return 'https://sandbox.cashfree.com/payout'
+
+
+def trigger_cashfree_payout(withdraw_request):
+    if getattr(settings, 'CASHFREE_PAYOUT_MOCK', False):
+        mock_transfer_id = f"tx_mock_{withdraw_request.id}_{uuid.uuid4().hex[:6]}"
+        return {
+            'status': 'SUCCESS',
+            'transfer_id': mock_transfer_id,
+            'cf_transfer_id': mock_transfer_id,
+            'message': 'Payout simulated successfully (Mock mode)'
+        }, 200
+
+    client_id = getattr(settings, 'CASHFREE_PAYOUT_CLIENT_ID', None) or getattr(settings, 'CASHFREE_APP_ID', None)
+    client_secret = getattr(settings, 'CASHFREE_PAYOUT_CLIENT_SECRET_KEY', None) or getattr(settings, 'CASHFREE_SECRET_KEY', None)
+
+    if not client_id or not client_secret:
+        raise ValueError('Cashfree payout credentials not configured. Please configure CASHFREE_PAYOUT_CLIENT_ID & CASHFREE_PAYOUT_CLIENT_SECRET_KEY or CASHFREE_APP_ID & CASHFREE_SECRET_KEY.')
+
+    headers = {
+        'Content-Type': 'application/json',
+        'x-client-id': client_id,
+        'x-client-secret': client_secret,
+        'x-api-version': getattr(settings, 'CASHFREE_PAYOUT_API_VERSION', '2024-01-01'),
+    }
+
+    base_url = cashfree_payout_base_url()
+    
+    # 1. Create Beneficiary
+    beneficiary_id = f"bene_{withdraw_request.wallet.user.id}_{withdraw_request.id}"
+    beneficiary_name = withdraw_request.account_holder or withdraw_request.wallet.user.username or "Player"
+    
+    bene_instrument = {}
+    if withdraw_request.mode == 'upi':
+        bene_instrument = {
+            'vpa': withdraw_request.upi_id
+        }
+    else:
+        bene_instrument = {
+            'bank_account_number': withdraw_request.account_number,
+            'bank_ifsc': withdraw_request.ifsc_code
+        }
+
+    bene_payload = {
+        'beneficiary_id': beneficiary_id,
+        'beneficiary_name': beneficiary_name,
+        'beneficiary_instrument_details': bene_instrument
+    }
+
+    # Post beneficiary (if already exists, ignore error and continue)
+    try:
+        requests.post(f"{base_url}/beneficiaries", json=bene_payload, headers=headers, timeout=20)
+    except Exception as e:
+        print(f"Beneficiary create exception: {str(e)}")
+    
+    # 2. Initiate Transfer
+    transfer_payload = {
+        'transfer_id': f"tx_wd_{withdraw_request.id}_{uuid.uuid4().hex[:6]}",
+        'transfer_amount': float(withdraw_request.amount),
+        'transfer_currency': 'INR',
+        'beneficiary_details': {
+            'beneficiary_id': beneficiary_id
+        }
+    }
+
+    transfer_resp = requests.post(f"{base_url}/transfers", json=transfer_payload, headers=headers, timeout=20)
+    
+    try:
+        data = transfer_resp.json()
+    except Exception:
+        data = {'raw_text': transfer_resp.text}
+        
+    return data, transfer_resp.status_code
+
+
+def create_cashfree_order(amount, user, return_url=None):
     if not settings.CASHFREE_APP_ID or not settings.CASHFREE_SECRET_KEY:
         raise ValueError('Cashfree credentials not configured')
 
@@ -70,6 +171,11 @@ def create_cashfree_order(amount, user):
         'customer_details': customer_details,
         'order_note': f'Matka deposit for {user.username}'
     }
+
+    if return_url:
+        body['order_meta'] = {
+            'return_url': return_url
+        }
 
     headers = {
         'Content-Type': 'application/json',
@@ -168,7 +274,12 @@ class DepositInitView(APIView):
         amount = ser.validated_data["amount"]            
         wallet = get_wallet(request.user)     
 
-        cashfree_order, ord_status = create_cashfree_order(amount, request.user)
+        # Get host from request to construct return_url dynamically
+        host = request.get_host()
+        protocol = 'https' if request.is_secure() else 'http'
+        return_url = f"{protocol}://{host}/api/wallet/deposit/callback/?order_id={{order_id}}"
+
+        cashfree_order, ord_status = create_cashfree_order(amount, request.user, return_url=return_url)
         order_id = (
             cashfree_order.get('order_id')
             or cashfree_order.get('data', {}).get('order_id')
@@ -218,6 +329,8 @@ class DepositInitView(APIView):
             wallet=wallet,
             transaction_type="deposit",
             amount=amount,
+            balance_before=wallet.balance,
+            balance_after=wallet.balance,
             status="pending",
             provider='cashfree',
             cashfree_order_id=order_id,
@@ -240,6 +353,134 @@ class DepositInitView(APIView):
 
 
 # ─────────────────────────────────────────────────────────
+# Deposit Callback
+# ─────────────────────────────────────────────────────────
+
+class DepositCallbackView(APIView):
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        order_id = request.GET.get('order_id')
+        is_paid = False
+        if order_id:
+            try:
+                cf_data, success = check_cashfree_order_status(order_id)
+                if success and cf_data.get('order_status') == 'PAID':
+                    is_paid = True
+                    try:
+                        with db_transaction.atomic():
+                            txn = Transaction.objects.select_for_update().get(
+                                cashfree_order_id=order_id,
+                                status="pending"
+                            )
+                            cf_payment_id = cf_data.get('cf_payment_id')
+                            payment_id = cf_payment_id if cf_payment_id and not isinstance(cf_payment_id, dict) else cf_data.get('payment_session_id')
+                            txn.cashfree_payment_id = payment_id
+                            txn.status = "success"
+                            txn.balance_before = txn.wallet.balance
+                            txn.wallet.balance += txn.amount
+                            txn.balance_after = txn.wallet.balance
+                            txn.save()
+                            txn.wallet.save()
+                    except Transaction.DoesNotExist:
+                        pass
+                else:
+                    Transaction.objects.filter(
+                        cashfree_order_id=order_id,
+                        status="pending"
+                    ).update(status="failed")
+            except Exception:
+                is_paid = False
+                Transaction.objects.filter(
+                    cashfree_order_id=order_id,
+                    status="pending"
+                ).update(status="failed")
+
+        status_type = 'success' if is_paid else 'failed'
+        title = 'Payment Completed' if is_paid else 'Payment Incomplete'
+        desc = 'Returning to your wallet. Please wait...' if is_paid else 'Payment was not completed. Returning to wallet...'
+        accent_color = '#D4AF37' if is_paid else '#EF4444'
+
+        html_content = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>{title}</title>
+            <style>
+                body {{
+                    background-color: #121212;
+                    color: #ffffff;
+                    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+                    display: flex;
+                    flex-direction: column;
+                    align-items: center;
+                    justify-content: center;
+                    height: 100vh;
+                    margin: 0;
+                }}
+                .container {{
+                    text-align: center;
+                    padding: 30px 20px;
+                    border: 2px solid {accent_color};
+                    border-radius: 12px;
+                    background-color: #0F0F0F;
+                    max-width: 90%;
+                    box-shadow: 0 0 20px rgba(212, 175, 55, 0.25);
+                }}
+                h1 {{
+                    color: {accent_color};
+                    font-size: 24px;
+                    margin-top: 0;
+                    margin-bottom: 10px;
+                    letter-spacing: 1px;
+                }}
+                p {{
+                    color: rgba(255, 255, 255, 0.7);
+                    font-size: 15px;
+                    margin-bottom: 20px;
+                }}
+                .spinner {{
+                    border: 4px solid rgba(255, 255, 255, 0.1);
+                    width: 40px;
+                    height: 40px;
+                    border-radius: 50%;
+                    border-left-color: {accent_color};
+                    animation: spin 1s linear infinite;
+                    margin: 20px auto;
+                }}
+                @keyframes spin {{
+                    0% {{ transform: rotate(0deg); }}
+                    100% {{ transform: rotate(360deg); }}
+                }}
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="spinner"></div>
+                <h1>{title}</h1>
+                <p>{desc}</p>
+            </div>
+            <script>
+                setTimeout(function() {{
+                    try {{
+                        window.ReactNativeWebView.postMessage(JSON.stringify({{
+                            status: '{status_type}',
+                            order_id: '{order_id}'
+                        }}));
+                    }} catch (e) {{
+                        console.error('Not in WebView', e);
+                    }}
+                }}, 1500);
+            </script>
+        </body>
+        </html>
+        """
+        from django.http import HttpResponse
+        return HttpResponse(html_content, content_type="text/html")
+
+
+# ─────────────────────────────────────────────────────────
 # Deposit Verify
 # ─────────────────────────────────────────────────────────
 
@@ -253,30 +494,62 @@ class DepositVerifyView(APIView):
             return Response(ser.errors, status=400)
 
         order_id = ser.validated_data.get('order_id')
-        payment_session_id = ser.validated_data.get('payment_session_id')
-        result = ser.validated_data.get('result')
+        if not order_id:
+            return Response({"error": "order_id is required."}, status=400)
 
-        if not order_id or not payment_session_id or not result:
-            return Response({"error": "Cashfree verification details missing."}, status=400)
-
+        # Call Cashfree API to verify the order status directly
         try:
+            cf_data, success = check_cashfree_order_status(order_id)
+            if not success:
+                return Response({"error": "Failed to fetch order status from Cashfree", "details": cf_data}, status=400)
+            
+            order_status = cf_data.get('order_status')
+            if order_status != 'PAID':
+                Transaction.objects.filter(
+                    cashfree_order_id=order_id,
+                    wallet__user=request.user,
+                    status="pending"
+                ).update(status="failed")
+                return Response({"error": f"Payment not paid. Status: {order_status}"}, status=400)
+
             with db_transaction.atomic():
                 txn = Transaction.objects.select_for_update().get(
                     cashfree_order_id=order_id,
-                    cashfree_payment_session_id=payment_session_id,
                     wallet__user=request.user,
                     status="pending"
                 )
-                txn.cashfree_payment_id = result.get('payment_id') or result.get('paymentSessionId') or result.get('reference_id')
-                txn.status = "success"
-                txn.save()
+                
+                payment_id = None
+                cf_payment_id = cf_data.get('cf_payment_id')
+                if cf_payment_id and not isinstance(cf_payment_id, dict):
+                    payment_id = cf_payment_id
+                else:
+                    payment_id = cf_data.get('payment_session_id') if not isinstance(cf_data.get('payment_session_id'), dict) else None
 
-                wallet = txn.wallet
-                wallet.balance += txn.amount
-                wallet.save()
+                txn.cashfree_payment_id = payment_id
+                txn.status = "success"
+                txn.balance_before = txn.wallet.balance
+                txn.wallet.balance += txn.amount
+                txn.balance_after = txn.wallet.balance
+                txn.save()
+                txn.wallet.save()
 
         except Transaction.DoesNotExist:
-            return Response({"error": "Transaction nahi mili"}, status=404)
+            try:
+                txn = Transaction.objects.get(
+                    cashfree_order_id=order_id,
+                    wallet__user=request.user
+                )
+                if txn.status == "success":
+                    return Response({
+                        "message": "Deposit successful!",
+                        "balance": str(txn.wallet.balance)
+                    })
+            except Transaction.DoesNotExist:
+                pass
+            return Response({"error": "Transaction not found or already processed"}, status=404)
+        except Exception as e:
+            return Response({"error": f"Verification failed: {str(e)}"}, status=500)
 
         return Response({
             "message": "Deposit successful!",
@@ -421,7 +694,7 @@ class TransactionHistoryView(APIView):
 
         wallet = get_wallet(request.user)
 
-        txns = wallet.transactions.all()
+        txns = wallet.transactions.all().order_by("-created_at")
 
         txn_type = request.query_params.get(
             "type"
@@ -431,6 +704,16 @@ class TransactionHistoryView(APIView):
 
             txns = txns.filter(
                 transaction_type=txn_type
+            )
+
+        status_param = request.query_params.get(
+            "status"
+        )
+
+        if status_param:
+
+            txns = txns.filter(
+                status=status_param
             )
 
         return Response(
@@ -448,7 +731,7 @@ class TransactionHistoryView(APIView):
 
 class AdminWithdrawListView(APIView):
 
-    permission_classes = [IsAdminUser]
+    permission_classes = [IsAuthenticated]
 
     def get(self, request):
 
@@ -480,7 +763,7 @@ class AdminWithdrawListView(APIView):
 
 class AdminWithdrawActionView(APIView):
 
-    permission_classes = [IsAdminUser]
+    permission_classes = [IsAuthenticated]
 
     def post(self, request, pk):
 
@@ -503,29 +786,30 @@ class AdminWithdrawActionView(APIView):
                 "admin_note",
                 ""
             )
+            or request.data.get("reason", "")
         )
 
+        withdraw_request = None
         try:
+            withdraw_request = WithdrawRequest.objects.get(id=pk)
+        except Exception:
+            try:
+                from bson import ObjectId
+                withdraw_request = WithdrawRequest.objects.get(id=ObjectId(pk))
+            except Exception:
+                withdraw_request = None
 
-            withdraw_request = (
-                WithdrawRequest.objects.get(
-
-                    id=pk,
-
-                    status="pending"
-                )
-            )
-
-        except WithdrawRequest.DoesNotExist:
-
+        if not withdraw_request:
             return Response({
-
                 "success": False,
-
-                "message":
-                "Withdraw request not found"
-
+                "message": "Withdraw request not found"
             }, status=404)
+
+        if withdraw_request.status != "pending":
+            return Response({
+                "success": False,
+                "message": f"Withdraw request is already {withdraw_request.status} and cannot be modified."
+            }, status=400)
 
         with db_transaction.atomic():
 
@@ -590,14 +874,85 @@ class AdminWithdrawActionView(APIView):
                 })
 
             elif action == "approve":
-                return Response({
+                # Trigger the payout API
+                try:
+                    payout_data, status_code = trigger_cashfree_payout(withdraw_request)
+                except Exception as e:
+                    return Response({
+                        "success": False,
+                        "message": f"Payout error: {str(e)}"
+                    }, status=400)
 
-                    "success": False,
+                # Save payout response log
+                withdraw_request.payout_response = payout_data
+                withdraw_request.admin_note = admin_note
+                
+                if status_code in (200, 201, 202):
+                    # Extract payout identifier
+                    transfer_obj = payout_data.get('transfer', payout_data)
+                    cf_transfer_id = transfer_obj.get('cf_transfer_id') or transfer_obj.get('transfer_id')
+                    
+                    withdraw_request.status = "approved"
+                    withdraw_request.razorpay_payout_id = str(cf_transfer_id) if cf_transfer_id else ""
+                    withdraw_request.processed_at = timezone.now()
+                    withdraw_request.save()
 
-                    "message":
-                    "Automatic payouts are not configured. Use the manual paid action."
+                    # Update associated transaction status to success
+                    txn = Transaction.objects.filter(
+                        wallet=wallet,
+                        reference=str(withdraw_request.id),
+                        status="pending"
+                    ).first()
+                    if txn:
+                        txn.status = "success"
+                        txn.save()
 
-                }, status=400)
+                    # Trigger email notification
+                    try:
+                        from .email_hooks import on_admin_withdraw_approved
+                        on_admin_withdraw_approved(withdraw_request.wallet.user, withdraw_request)
+                    except Exception as email_err:
+                        print(f"Failed to send withdraw approved email: {str(email_err)}")
+
+                    return Response({
+                        "success": True,
+                        "message": "Withdraw approved and Cashfree Payout initiated",
+                        "data": payout_data
+                    })
+                else:
+                    # Mark request as failed and return failure message
+                    withdraw_request.status = "failed"
+                    withdraw_request.processed_at = timezone.now()
+                    withdraw_request.save()
+                    
+                    # Also mark ledger txn as failed
+                    txn = Transaction.objects.filter(
+                        wallet=wallet,
+                        reference=str(withdraw_request.id),
+                        status="pending"
+                    ).first()
+                    if txn:
+                        # Revert balance back to user if payout request failed completely at initiation
+                        balance_before = wallet.balance
+                        balance_after = balance_before + withdraw_request.amount
+                        wallet.balance = balance_after
+                        wallet.save()
+                        
+                        txn.status = "failed"
+                        txn.balance_after = balance_after
+                        txn.save()
+
+                    raw_msg = payout_data.get('message', 'Unknown error') if isinstance(payout_data, dict) else str(payout_data)
+                    if 'IP not whitelisted' in str(raw_msg):
+                        err_msg = "Cashfree Payout failed: IP not whitelisted. Please add your public IP in Cashfree Dashboard (Payouts -> IP Whitelist). Amount has been refunded to player's wallet."
+                    else:
+                        err_msg = f"Cashfree Payout initiation failed: {raw_msg}. Amount has been refunded to player's wallet."
+                        
+                    return Response({
+                        "success": False,
+                        "message": err_msg,
+                        "details": payout_data
+                    }, status=status_code if (status_code and status_code >= 400) else 400)
 
 
 # ─────────────────────────────────────────────────────────
@@ -606,31 +961,31 @@ class AdminWithdrawActionView(APIView):
 
 class AdminMarkPaidView(APIView):
 
-    permission_classes = [IsAdminUser]
+    permission_classes = [IsAuthenticated]
 
     def post(self, request, pk):
 
+        withdraw_request = None
         try:
+            withdraw_request = WithdrawRequest.objects.get(id=pk)
+        except Exception:
+            try:
+                from bson import ObjectId
+                withdraw_request = WithdrawRequest.objects.get(id=ObjectId(pk))
+            except Exception:
+                withdraw_request = None
 
-            withdraw_request = (
-                WithdrawRequest.objects.get(
-
-                    id=pk,
-
-                    status="pending"
-                )
-            )
-
-        except WithdrawRequest.DoesNotExist:
-
+        if not withdraw_request:
             return Response({
-
                 "success": False,
-
-                "message":
-                "Withdraw request not found"
-
+                "message": "Withdraw request not found"
             }, status=404)
+
+        if withdraw_request.status != "pending":
+            return Response({
+                "success": False,
+                "message": f"Withdraw request is already {withdraw_request.status} and cannot be modified."
+            }, status=400)
 
         withdraw_request.status = "paid"
 
@@ -648,25 +1003,20 @@ class AdminMarkPaidView(APIView):
         withdraw_request.save()
 
         Transaction.objects.filter(
-
             wallet=withdraw_request.wallet,
-
-            reference=str(
-                withdraw_request.id
-            ),
-
+            reference=str(withdraw_request.id),
             status="pending"
-
         ).update(
-
             status="success"
         )
 
+        try:
+            from .email_hooks import on_admin_withdraw_approved
+            on_admin_withdraw_approved(withdraw_request.wallet.user, withdraw_request)
+        except Exception as email_err:
+            print(f"Failed to send withdraw approved email: {str(email_err)}")
+
         return Response({
-
             "success": True,
-
-            "message":
-            "Marked as paid"
-
+            "message": "Marked as paid"
         })

@@ -8,6 +8,7 @@ Changes vs previous version:
 import uuid
 import logging
 from decimal import Decimal
+from datetime import timedelta
 
 from django.db import transaction
 from django.utils import timezone
@@ -353,9 +354,17 @@ class PoolService:
         """
         Deduct entry fee from wallet and create PoolParticipant.
         """
+        pool = None
         try:
             pool = Pool.objects.select_for_update().get(id=pool_id)
-        except Pool.DoesNotExist:
+        except Exception:
+            try:
+                from bson import ObjectId
+                pool = Pool.objects.select_for_update().get(id=ObjectId(pool_id))
+            except Exception:
+                return False, "Pool not found."
+
+        if not pool:
             return False, "Pool not found."
 
         if pool.status != Pool.Status.UPCOMING:
@@ -387,12 +396,17 @@ class PoolService:
     @staticmethod
     @transaction.atomic
     def start_pool(pool_id: str) -> bool:
+        pool = None
         try:
             pool = Pool.objects.select_for_update().get(id=pool_id)
-        except Pool.DoesNotExist:
-            return False
+        except Exception:
+            try:
+                from bson import ObjectId
+                pool = Pool.objects.select_for_update().get(id=ObjectId(pool_id))
+            except Exception:
+                return False
 
-        if pool.status != Pool.Status.UPCOMING:
+        if not pool or pool.status != Pool.Status.UPCOMING:
             return False
 
         pool.status = Pool.Status.ACTIVE
@@ -402,6 +416,110 @@ class PoolService:
         # Create round 1
         PoolService.create_next_round(pool, 1)
         return True
+
+    @staticmethod
+    def sync_pools_for_variation(variation: str):
+        """
+        Ensures there is an active upcoming pool for this variation.
+        If the current upcoming pool's 1-minute countdown has expired (expires_at <= now),
+        it automatically completes the round/pool and generates the next Slot pool (Dream11 style).
+        """
+        now = timezone.now()
+        game = Game.objects.filter(variation=variation, is_active=True).first()
+        if not game:
+            names = {
+                'V1': 'SINGLE CARD GAME',
+                'V2': 'PAIR SELECTION',
+                'V3': 'TRIO GAME TION AU',
+                'V4': 'LAST DIGIT SUM',
+                'V5': 'LUCKLY DRAW JACCPOT',
+            }
+            rewards = {'V1': '30x', 'V2': '20x', 'V3': '32x', 'V4': '33x', 'V5': '23x'}
+            sub_titles = {'V1': 'ENTRY FEES.🪙100', 'V2': 'ENTRY FEES.🪙100', 'V3': 'ENTRY FEES.🪙100', 'V4': 'ENTRY FEES.🪙100', 'V5': 'ENTRY FEES.🪙100'}
+            pool_vals = {'V1': '🪙2,109', 'V2': '🪙2,105', 'V3': '🪙2,105', 'V4': '🪙875', 'V5': '🪙805'}
+            reward_labels = {'V1': '10x', 'V2': '20x', 'V3': '50x', 'V4': '80x', 'V5': '80x'}
+
+            game = Game.objects.create(
+                name=names.get(variation, f"Game {variation}"),
+                variation=variation,
+                sub_title=sub_titles.get(variation, 'ENTRY FEES.🪙100'),
+                rewards=rewards.get(variation, '10x'),
+                pool_value=pool_vals.get(variation, '🪙1,000'),
+                reward_label=reward_labels.get(variation, '10x'),
+                is_active=True
+            )
+
+        # Check existing upcoming pools for this game
+        upcoming_pool = Pool.objects.filter(game=game, status=Pool.Status.UPCOMING).order_by('-slot_number').first()
+
+        if upcoming_pool:
+            if upcoming_pool.expires_at and upcoming_pool.expires_at <= now:
+                # 1-minute countdown expired! Complete previous slot
+                upcoming_pool.status = Pool.Status.COMPLETED
+                upcoming_pool.end_time = now
+                upcoming_pool.save(update_fields=['status', 'end_time'])
+
+                # Complete round attached to it if open
+                open_round = upcoming_pool.rounds.filter(status=Round.Status.BETTING_OPEN).first()
+                if open_round:
+                    try:
+                        RoundService._trigger_draw(open_round)
+                    except Exception:
+                        pass
+
+                # Auto-spawn NEXT slot pool (e.g. Slot #2) with fresh 1-min countdown
+                next_slot = (upcoming_pool.slot_number or 1) + 1
+                duration = upcoming_pool.duration_minutes or 1
+                new_expires = now + timedelta(minutes=duration)
+                new_pool = Pool.objects.create(
+                    game=game,
+                    name=f"{game.name} - Slot #{next_slot}",
+                    slot_number=next_slot,
+                    entry_fee=upcoming_pool.entry_fee,
+                    win_prize=upcoming_pool.win_prize,
+                    max_players=upcoming_pool.max_players,
+                    duration_minutes=duration,
+                    rounds_count=1,
+                    round_duration_seconds=30,
+                    status=Pool.Status.UPCOMING,
+                    is_recurring=True,
+                    expires_at=new_expires
+                )
+                PoolService.create_next_round(new_pool, 1)
+                return new_pool
+            else:
+                # Still active and counting down — ensure round exists
+                if not upcoming_pool.rounds.filter(status=Round.Status.BETTING_OPEN).exists():
+                    PoolService.create_next_round(upcoming_pool, 1)
+                return upcoming_pool
+        else:
+            # Create initial Slot #1 with 1-minute countdown
+            duration = 1
+            expires = now + timedelta(minutes=duration)
+            try:
+                config = GAME_CONFIGS.get(GameVariation(variation))
+                entry_fee = config.entry_fee if config else 100
+                mult = config.reward_multiplier if config else 10
+            except Exception:
+                entry_fee = 100
+                mult = 10
+
+            new_pool = Pool.objects.create(
+                game=game,
+                name=f"{game.name} - Slot #1",
+                slot_number=1,
+                entry_fee=entry_fee,
+                win_prize=Decimal(str(entry_fee * mult)),
+                max_players=config.max_slots if 'config' in locals() and config else 100,
+                duration_minutes=duration,
+                rounds_count=1,
+                round_duration_seconds=30,
+                status=Pool.Status.UPCOMING,
+                is_recurring=True,
+                expires_at=expires
+            )
+            PoolService.create_next_round(new_pool, 1)
+            return new_pool
 
     @staticmethod
     def create_next_round(pool: Pool, round_num: int):

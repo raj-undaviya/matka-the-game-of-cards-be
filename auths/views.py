@@ -70,27 +70,24 @@ class LoginView(APIView):
         user = User.objects.filter(email=email).first()
 
         if user and user.check_password(password):
+            if not user.is_superuser and not user.is_email_verified:
+                # Purane OTPs invalidate karo
+                PasswordResetOTP.objects.filter(user=user, is_used=False).update(is_used=True)
 
-            if not user.is_superuser:
+                otp = str(random.randint(100000, 999999))
+                PasswordResetOTP.objects.create(user=user, otp=otp)
 
-                if not user.is_email_verified:
-                    # Purane OTPs invalidate karo
-                    PasswordResetOTP.objects.filter(user=user, is_used=False).update(is_used=True)
+                # ── Registration OTP email ────────────────────────────────────────────
+                EmailService.send_registration_otp(user, otp=otp)
 
-                    otp = str(random.randint(100000, 999999))
-                    PasswordResetOTP.objects.create(user=user, otp=otp)
-
-                    # ── Registration OTP email ────────────────────────────────────────────
-                    EmailService.send_registration_otp(user, otp=otp)
-
-                    return Response(
-                        {
-                            "message": "Email not verified. Verification OTP sent to your registered email.",
-                            "is_email_verified": False,
-                            "email": user.email
-                        },
-                        status=status.HTTP_200_OK,
-                    )
+                return Response(
+                    {
+                        "message": "Email not verified. Verification OTP sent to your registered email.",
+                        "is_email_verified": False,
+                        "email": user.email
+                    },
+                    status=status.HTTP_200_OK,
+                )
 
             serializer = UserSerializer(user)
             user.last_login = datetime.now()

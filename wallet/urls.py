@@ -5,6 +5,7 @@ from .views import (
     WalletBalanceView,
     DepositInitView,
     DepositVerifyView,
+    DepositCallbackView,
     WithdrawRequestView,
     AdminWithdrawActionView,
     TransactionHistoryView,
@@ -15,6 +16,7 @@ urlpatterns = [
     path("balance/",        WalletBalanceView.as_view(),      name="wallet-balance"),
     path("deposit/init/",   DepositInitView.as_view(),        name="wallet-deposit-init"),
     path("deposit/verify/", DepositVerifyView.as_view(),      name="wallet-deposit-verify"),
+    path("deposit/callback/", DepositCallbackView.as_view(),    name="wallet-deposit-callback"),
     path("withdraw/",       WithdrawRequestView.as_view(),    name="wallet-withdraw"),
     path("transactions/",   TransactionHistoryView.as_view(), name="wallet-transactions"),
 
