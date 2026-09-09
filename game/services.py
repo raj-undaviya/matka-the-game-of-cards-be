@@ -466,9 +466,9 @@ class PoolService:
                     except Exception:
                         pass
 
-                # Auto-spawn NEXT slot pool (e.g. Slot #2) with fresh 1-min countdown
+                # Auto-spawn NEXT slot pool (e.g. Slot #2) with fresh 5-min countdown (10 rounds)
                 next_slot = (upcoming_pool.slot_number or 1) + 1
-                duration = upcoming_pool.duration_minutes or 1
+                duration = 5
                 new_expires = now + timedelta(minutes=duration)
                 new_pool = Pool.objects.create(
                     game=game,
@@ -478,7 +478,7 @@ class PoolService:
                     win_prize=upcoming_pool.win_prize,
                     max_players=upcoming_pool.max_players,
                     duration_minutes=duration,
-                    rounds_count=1,
+                    rounds_count=10,
                     round_duration_seconds=30,
                     status=Pool.Status.UPCOMING,
                     is_recurring=True,
@@ -492,8 +492,8 @@ class PoolService:
                     PoolService.create_next_round(upcoming_pool, 1)
                 return upcoming_pool
         else:
-            # Create initial Slot #1 with 1-minute countdown
-            duration = 1
+            # Create initial Slot #1 with 5-minute countdown (10 rounds)
+            duration = 5
             expires = now + timedelta(minutes=duration)
             try:
                 config = GAME_CONFIGS.get(GameVariation(variation))
@@ -511,7 +511,7 @@ class PoolService:
                 win_prize=Decimal(str(entry_fee * mult)),
                 max_players=config.max_slots if 'config' in locals() and config else 100,
                 duration_minutes=duration,
-                rounds_count=1,
+                rounds_count=10,
                 round_duration_seconds=30,
                 status=Pool.Status.UPCOMING,
                 is_recurring=True,
@@ -562,8 +562,9 @@ class PoolService:
             part.rank = idx + 1
             part.save(update_fields=['rank'])
 
-        # Total pool amount collected
-        total_collected = pool.entry_fee * total_participants
+        # Total pool amount / prize to distribute
+        collected = Decimal(str(pool.entry_fee * total_participants))
+        total_prize = pool.win_prize if (pool.win_prize and pool.win_prize > collected) else collected
 
         # Reward distribution for top 3
         # 1st: 50%, 2nd: 30%, 3rd: 20%
@@ -571,7 +572,7 @@ class PoolService:
 
         for rank_idx in range(min(3, total_participants)):
             part = participants[rank_idx]
-            payout = Decimal(str(total_collected)) * Decimal(str(percentages[rank_idx]))
+            payout = Decimal(str(total_prize)) * Decimal(str(percentages[rank_idx]))
             part.reward_paid = payout
             part.save(update_fields=['reward_paid'])
 

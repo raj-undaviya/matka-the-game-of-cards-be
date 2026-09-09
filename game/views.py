@@ -1646,20 +1646,52 @@ class PoolLeaderboardView(APIView):
             except Exception:
                 return Response({"error": "Pool not found."}, status=status.HTTP_404_NOT_FOUND)
 
-        participants = pool.participants.all().order_by('rank', '-total_points', 'joined_at')
+        participants = list(pool.participants.all().order_by('rank', '-total_points', 'joined_at'))
         serializer = PoolParticipantSerializer(participants, many=True)
         
         # Include current active round ID and round number so FE can display it
-        active_round = pool.rounds.filter(status=Round.Status.BETTING_OPEN).first()
+        active_round = pool.rounds.filter(status=Round.Status.BETTING_OPEN).order_by('-round_number').first()
+        if not active_round:
+            # Fallback to latest round
+            active_round = pool.rounds.all().order_by('-created_at').first()
+
         active_round_id = str(active_round.id) if active_round else None
-        active_round_num = active_round.round_number if active_round else None
+        active_round_num = active_round.round_number if active_round else 1
+
+        # Calculate top 3 winners with payout preview
+        collected = Decimal(str(pool.entry_fee * len(participants)))
+        total_prize = pool.win_prize if (pool.win_prize and pool.win_prize > collected) else collected
+        percentages = [0.50, 0.30, 0.20]
+
+        top_winners = []
+        for idx in range(min(3, len(participants))):
+            part = participants[idx]
+            est_payout = float(part.reward_paid) if part.reward_paid > 0 else float(total_prize * Decimal(str(percentages[idx])))
+            top_winners.append({
+                "rank": part.rank or (idx + 1),
+                "username": part.user.username,
+                "user_id": str(part.user.id),
+                "total_points": part.total_points,
+                "reward_paid": est_payout,
+                "is_current_user": part.user == request.user,
+            })
+
+        user_part = next((p for p in participants if p.user == request.user), None)
 
         return Response({
+            "pool_id": str(pool.id),
             "pool_name": pool.name,
             "pool_status": pool.status,
             "game_variation": pool.game.variation,
             "rounds_count": pool.rounds_count,
+            "duration_minutes": pool.duration_minutes,
+            "entry_fee": pool.entry_fee,
+            "win_prize": float(pool.win_prize),
+            "total_players": len(participants),
             "active_round_id": active_round_id,
             "active_round_num": active_round_num,
+            "user_rank": user_part.rank if user_part else None,
+            "user_points": user_part.total_points if user_part else 0,
+            "top_winners": top_winners,
             "leaderboard": serializer.data
         })

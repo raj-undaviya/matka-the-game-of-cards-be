@@ -320,20 +320,37 @@ class ProfileView(APIView):
 class TokenRefreshView(APIView):
     """
     POST /api/auth/token/refresh/
-    Body: { "refresh": "<refresh_token>" }
+    Body: { "refresh": "<refresh_token>" } or { "refresh_token": "<refresh_token>" }
     """
     permission_classes = [AllowAny]
 
     def post(self, request):
-        refresh_token = request.data.get("refresh")
+        refresh_token = request.data.get("refresh") or request.data.get("refresh_token")
         if not refresh_token:
             return Response({"error": "Refresh token is required."}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
             refresh = RefreshToken(refresh_token)
-            return Response({"access": str(refresh.access_token)}, status=status.HTTP_200_OK)
-        except Exception:
-            return Response({"error": "Invalid or expired refresh token."}, status=status.HTTP_400_BAD_REQUEST)
+            access_token = str(refresh.access_token)
+
+            # Generate and rotate new refresh token
+            try:
+                refresh.set_jti()
+                refresh.set_exp()
+                refresh.set_iat()
+                new_refresh = str(refresh)
+            except Exception:
+                new_refresh = refresh_token
+
+            return Response({
+                "access": access_token,
+                "token": access_token,
+                "access_token": access_token,
+                "refresh": new_refresh,
+                "refresh_token": new_refresh,
+            }, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response({"error": "Invalid or expired refresh token.", "detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
 
 def serve_policy_file(request, filename):
