@@ -15,6 +15,7 @@ from pathlib import Path
 import os
 import dj_database_url
 from dotenv import load_dotenv
+import environ
 
 load_dotenv()
 
@@ -66,6 +67,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
+    'auths.middleware.AutoRefreshTokenMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -81,9 +83,17 @@ CORS_ALLOWED_METHODS = ['DELETE', 'GET', 'OPTIONS', 'PATCH', 'POST', 'PUT']
 
 CORS_ALLOWED_HEADERS = [
     'authorization',
-    'content-type',   # fixed: was missing — causes 400 on JSON POST
+    'content-type',
     'x-requested-with',
+    'x-refresh-token',
     'accept',
+]
+
+CORS_EXPOSE_HEADERS = [
+    'X-Access-Token',
+    'X-Refresh-Token',
+    'x-access-token',
+    'x-refresh-token',
 ]
 
 
@@ -108,25 +118,7 @@ WSGI_APPLICATION = 'matka_the_game_of_cards.wsgi.application'
 
 
 # Database
-# https://docs.djangoproject.com/en/6.0/ref/settings/#databases
-
-# DATABASES = {
-#     'default': {
-#         'ENGINE': 'django.db.backends.sqlite3',
-#         'NAME': BASE_DIR / 'db.sqlite3',
-#     }
-# }
-
-# DATABASES = {
-#     'default': {
-#         'ENGINE': 'django.db.backends.postgresql',
-#         'NAME': os.getenv('NAME'),
-#         'USER': os.getenv('USER'),
-#         'PASSWORD': os.getenv('PASSWORD'),
-#         'HOST': os.getenv('HOST'),
-#         'PORT': os.getenv('PORT'),
-#     }
-# }
+# https://docs.djangoproject.com/en/6.0/ref/databases
 
 DATABASES = {
     'default': {
@@ -134,10 +126,6 @@ DATABASES = {
         'HOST': os.getenv('MONGODB_URI'),
         'NAME': os.getenv('MONGODB_NAME'),
     }
-    # 'sqlite': {
-    #     'ENGINE': 'django.db.backends.sqlite3',
-    #     'NAME': BASE_DIR / 'db.sqlite3',
-    # }
 }
 
 DATABASE_ROUTERS = ['matka_the_game_of_cards.routers.DatabaseRouter']
@@ -147,8 +135,8 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
+        'auths.authentication.AutoRefreshTokenAuthentication',
         'rest_framework_simplejwt.authentication.JWTAuthentication',
-        
     ),
     'DEFAULT_PERMISSION_CLASSES': (
         'rest_framework.permissions.IsAuthenticated',
@@ -246,7 +234,6 @@ CHANNEL_LAYERS = {
     }
 }
 
-import environ
 env = environ.Env()
 environ.Env.read_env()  # .env file read karega
  

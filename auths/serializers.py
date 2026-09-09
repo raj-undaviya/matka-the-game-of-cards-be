@@ -52,15 +52,31 @@ class RegisterSerializer(serializers.ModelSerializer):
 
 class UserSerializer(serializers.ModelSerializer):
     token = serializers.SerializerMethodField(read_only=True)
+    access_token = serializers.SerializerMethodField(read_only=True)
+    refresh_token = serializers.SerializerMethodField(read_only=True)
+    refresh = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model  = User
         fields = [
             'id', 'username', 'email',
             'first_name', 'last_name',
-            'is_staff', 'token', 'is_superuser'
+            'is_staff', 'token', 'access_token', 'refresh_token', 'refresh', 'is_superuser'
         ]
 
+    def _get_refresh_object(self, obj):
+        if not hasattr(obj, '_jwt_refresh_obj'):
+            obj._jwt_refresh_obj = RefreshToken.for_user(obj)
+        return obj._jwt_refresh_obj
+
     def get_token(self, obj):
-        token = RefreshToken.for_user(obj)
-        return str(token.access_token)
+        return str(self._get_refresh_object(obj).access_token)
+
+    def get_access_token(self, obj):
+        return str(self._get_refresh_object(obj).access_token)
+
+    def get_refresh_token(self, obj):
+        return str(self._get_refresh_object(obj))
+
+    def get_refresh(self, obj):
+        return str(self._get_refresh_object(obj))
