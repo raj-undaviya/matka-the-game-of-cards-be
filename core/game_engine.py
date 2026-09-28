@@ -87,11 +87,8 @@ class GameEngine:
             return False, f"{bet.variation.name} requires exactly {req} number(s)."
 
         # Entry fee validation
-        if bet.variation != GameVariation.JACKPOT:
-            if bet.entry_fee != config.entry_fee:
-                return False, f"Entry fee must be exactly {config.entry_fee}."
-        elif bet.entry_fee < 1:
-            return False, "Jackpot minimum entry is 1."
+        if bet.entry_fee < 1:
+            return False, "Entry fee must be at least 1."
 
         return True, "OK"
 

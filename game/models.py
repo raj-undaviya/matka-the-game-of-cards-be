@@ -53,10 +53,19 @@ class Pool(models.Model):
     entry_fee = models.PositiveIntegerField(default=10)
     win_prize = models.DecimalField(max_digits=12, decimal_places=2, default=0.00)
     max_players = models.PositiveIntegerField(default=100)
-    duration_minutes = models.PositiveIntegerField(default=1)  # 1 min default countdown
-    rounds_count = models.PositiveIntegerField(default=1)
+    duration_minutes = models.PositiveIntegerField(default=5)
+    rounds_count = models.PositiveIntegerField(default=10)
     round_duration_seconds = models.PositiveIntegerField(default=30)
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.UPCOMING)
+    pool_type = models.CharField(max_length=50, default='standard', blank=True)
+    interval_minutes = models.PositiveIntegerField(default=0)
+    is_entry_enabled = models.BooleanField(default=True)
+    scheduled_start_time = models.DateTimeField(null=True, blank=True)
+    is_daily_mega = models.BooleanField(default=False)
+    country = models.CharField(max_length=100, default='India', blank=True)
+    daily_start_time = models.TimeField(null=True, blank=True)  # e.g. 13:30:00 for 1:30 PM
+    once_per_day = models.BooleanField(default=False)
+    prize_distribution = models.JSONField(default=dict, blank=True)  # e.g. {"1": 6000, "2": 4000, "3": 2000}
     is_recurring = models.BooleanField(default=True)
     expires_at = models.DateTimeField(null=True, blank=True)  # Countdown target
     created_at = models.DateTimeField(auto_now_add=True)
@@ -64,7 +73,8 @@ class Pool(models.Model):
     end_time = models.DateTimeField(null=True, blank=True)
 
     def __str__(self):
-        return f"{self.name} (Slot {self.slot_number}) - Fee: ₹{self.entry_fee} [{self.status}]"
+        pool_type_str = " [MEGA]" if self.is_daily_mega else ""
+        return f"{self.name}{pool_type_str} (Slot {self.slot_number}) - Fee: ₹{self.entry_fee} [{self.status}]"
 
 
 class PoolParticipant(models.Model):

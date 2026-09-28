@@ -244,15 +244,12 @@ class PlaceBetView(APIView):
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
         data = serializer.validated_data
-        print("Serializer Data --->", data)
         success, result = RoundService.place_bet(
             round_id=str(data['round_id']),
             user=request.user,
             selected_numbers=data['selected_numbers'],
             entry_fee=data['entry_fee']
         )
-        print("Success ->", success)
-        print("Result ->", result)
 
         if not success:
             return Response({"error": result}, status=status.HTTP_400_BAD_REQUEST)
@@ -1587,10 +1584,44 @@ class AdminPoolCreateView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        serializer = PoolSerializer(data=request.data)
+        data = request.data.copy() if hasattr(request.data, 'copy') else dict(request.data)
+        now = timezone.now()
+
+        if data.get('is_daily_mega') or data.get('pool_type') == 'mega_daily':
+            data['is_daily_mega'] = True
+            data['pool_type'] = 'mega_daily'
+            if not data.get('prize_distribution'):
+                data['prize_distribution'] = {
+                    "1": 6000,
+                    "2": 4000,
+                    "3": 2000,
+                    "multipliers": {"1": "30x", "2": "20x", "3": "10x"}
+                }
+            if not data.get('country'):
+                data['country'] = 'India'
+            if 'once_per_day' not in data:
+                data['once_per_day'] = True
+
+        elif data.get('pool_type') == 'hourly_pool' or data.get('start_delay_hours') or data.get('interval_hours'):
+            delay_h = int(data.get('start_delay_hours') or data.get('interval_hours') or 2)
+            duration_m = int(data.get('duration_minutes') or 5)
+            scheduled_start = now + timedelta(hours=delay_h)
+            data['scheduled_start_time'] = scheduled_start
+            data['expires_at'] = scheduled_start + timedelta(minutes=duration_m)
+            data['interval_minutes'] = delay_h * 60
+            data['pool_type'] = 'hourly_pool'
+
+        elif data.get('pool_type') in ['regular_pool', 'regular_5min']:
+            data['duration_minutes'] = 5
+            data['interval_minutes'] = 0
+            data['expires_at'] = now + timedelta(minutes=5)
+
+        serializer = PoolSerializer(data=data, context={'request': request})
         if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
+            pool = serializer.save()
+            # Create initial round 1 for the newly created pool
+            PoolService.create_next_round(pool, 1)
+            return Response(PoolSerializer(pool, context={'request': request}).data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
@@ -1611,13 +1642,32 @@ class PoolListView(APIView):
         variation = request.query_params.get('variation')
         if variation:
             PoolService.sync_pools_for_variation(variation)
-            pools = Pool.objects.filter(game__variation=variation, status=Pool.Status.UPCOMING).order_by('-slot_number')
+            raw_pools = list(Pool.objects.filter(
+                game__variation=variation,
+                status__in=[Pool.Status.UPCOMING, Pool.Status.ACTIVE]
+            ).select_related('game').order_by('-is_daily_mega', 'entry_fee', '-slot_number'))
         else:
-            for v in ['V1', 'V2', 'V3', 'V4', 'V5']:
-                PoolService.sync_pools_for_variation(v)
-            pools = Pool.objects.filter(status=Pool.Status.UPCOMING).order_by('-created_at')
+            raw_pools = list(Pool.objects.filter(
+                status__in=[Pool.Status.UPCOMING, Pool.Status.ACTIVE]
+            ).select_related('game').order_by('-is_daily_mega', 'entry_fee', '-slot_number'))
+            # Only sync if no active pools exist
+            if not raw_pools:
+                for v in ['V1', 'V2', 'V3', 'V4', 'V5']:
+                    PoolService.sync_pools_for_variation(v)
+                raw_pools = list(Pool.objects.filter(
+                    status__in=[Pool.Status.UPCOMING, Pool.Status.ACTIVE]
+                ).select_related('game').order_by('-is_daily_mega', 'entry_fee', '-slot_number'))
 
-        serializer = PoolSerializer(pools, many=True)
+        # Ensure only 1 active slot per pool_type/variation
+        pools = []
+        seen = set()
+        for p in raw_pools:
+            key = f"{p.game.variation}_{p.pool_type}"
+            if key not in seen:
+                seen.add(key)
+                pools.append(p)
+
+        serializer = PoolSerializer(pools, many=True, context={'request': request})
         return Response(serializer.data)
 
 
@@ -1661,12 +1711,28 @@ class PoolLeaderboardView(APIView):
         # Calculate top 3 winners with payout preview
         collected = Decimal(str(pool.entry_fee * len(participants)))
         total_prize = pool.win_prize if (pool.win_prize and pool.win_prize > collected) else collected
+
+        custom_prizes = None
+        if pool.prize_distribution and isinstance(pool.prize_distribution, dict) and '1' in pool.prize_distribution:
+            custom_prizes = pool.prize_distribution
+        elif pool.is_daily_mega or pool.pool_type == 'mega_daily':
+            custom_prizes = {"1": 6000, "2": 4000, "3": 2000}
+        elif pool.entry_fee == 10 and (pool.game.variation == 'V2' or 'Regular' in (pool.name or '')):
+            custom_prizes = {"1": 300, "2": 200, "3": 100}
+
         percentages = [0.50, 0.30, 0.20]
 
         top_winners = []
         for idx in range(min(3, len(participants))):
             part = participants[idx]
-            est_payout = float(part.reward_paid) if part.reward_paid > 0 else float(total_prize * Decimal(str(percentages[idx])))
+            rank_str = str(idx + 1)
+            if part.reward_paid > 0:
+                est_payout = float(part.reward_paid)
+            elif custom_prizes and rank_str in custom_prizes:
+                est_payout = float(custom_prizes[rank_str])
+            else:
+                est_payout = float(total_prize * Decimal(str(percentages[idx])))
+
             top_winners.append({
                 "rank": part.rank or (idx + 1),
                 "username": part.user.username,
@@ -1681,6 +1747,9 @@ class PoolLeaderboardView(APIView):
         return Response({
             "pool_id": str(pool.id),
             "pool_name": pool.name,
+            "pool_type": pool.pool_type,
+            "is_daily_mega": pool.is_daily_mega,
+            "country": pool.country,
             "pool_status": pool.status,
             "game_variation": pool.game.variation,
             "rounds_count": pool.rounds_count,
@@ -1688,6 +1757,7 @@ class PoolLeaderboardView(APIView):
             "entry_fee": pool.entry_fee,
             "win_prize": float(pool.win_prize),
             "total_players": len(participants),
+            "max_players": pool.max_players,
             "active_round_id": active_round_id,
             "active_round_num": active_round_num,
             "user_rank": user_part.rank if user_part else None,

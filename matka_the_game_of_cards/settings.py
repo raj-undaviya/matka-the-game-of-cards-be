@@ -227,7 +227,7 @@ CHANNEL_LAYERS = {
     "default": {
         "BACKEND": "channels_redis.core.RedisChannelLayer",
         "CONFIG": {
-            "hosts": [("127.0.0.1", 6379)],
+            "hosts": [("192.168.1.8", 6379)],
             "capacity": 1500,       # max messages per channel
             "expiry": 10,           # seconds before unread message expires
         },
