@@ -65,6 +65,7 @@ from django.utils import timezone
 from decimal import Decimal
 from django.db import transaction as db_transaction
 from django.core.cache import cache
+import re
 from datetime import timedelta
 from .models import Round, Bet, Game, Pool, PoolParticipant
 from wallet.models import Wallet, Transaction, WithdrawRequest
@@ -1658,16 +1659,7 @@ class PoolListView(APIView):
                     status__in=[Pool.Status.UPCOMING, Pool.Status.ACTIVE]
                 ).select_related('game').order_by('-is_daily_mega', 'entry_fee', '-slot_number'))
 
-        # Ensure only 1 active slot per pool_type/variation
-        pools = []
-        seen = set()
-        for p in raw_pools:
-            key = f"{p.game.variation}_{p.pool_type}"
-            if key not in seen:
-                seen.add(key)
-                pools.append(p)
-
-        serializer = PoolSerializer(pools, many=True, context={'request': request})
+        serializer = PoolSerializer(raw_pools, many=True, context={'request': request})
         return Response(serializer.data)
 
 

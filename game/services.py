@@ -703,15 +703,24 @@ class PoolService:
                     )
                     PoolService.create_next_round(new_pool, 1)
 
-        # ── 2. Cleanup duplicate active slots for the same pool type ──
-        seen_types = set()
+        # ── 2. Cleanup duplicate auto-provisioned slots (regular_pool and mega_daily) ──
+        seen_regular = False
+        seen_mega = False
         for pool in Pool.objects.filter(game=game, status__in=[Pool.Status.UPCOMING, Pool.Status.ACTIVE]).order_by('-slot_number', '-created_at'):
-            if pool.pool_type in seen_types:
-                pool.status = Pool.Status.COMPLETED
-                pool.end_time = now
-                pool.save(update_fields=['status', 'end_time'])
-            else:
-                seen_types.add(pool.pool_type)
+            if pool.pool_type in ['regular_pool', 'regular_5min']:
+                if seen_regular:
+                    pool.status = Pool.Status.COMPLETED
+                    pool.end_time = now
+                    pool.save(update_fields=['status', 'end_time'])
+                else:
+                    seen_regular = True
+            elif pool.pool_type == 'mega_daily' or pool.is_daily_mega:
+                if seen_mega:
+                    pool.status = Pool.Status.COMPLETED
+                    pool.end_time = now
+                    pool.save(update_fields=['status', 'end_time'])
+                else:
+                    seen_mega = True
 
         # ── 3. Standard / Mega / Regular Pool Provisioning if missing ──
         pool_definitions = [
